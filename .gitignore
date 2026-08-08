@@ -1,0 +1,17 @@
+# This module is built in-tree by AzerothCore's own CMake, so nothing is
+# generated inside this directory during a normal build. These entries exist
+# for the cases where somebody points a build or an editor at it anyway.
+
+build/
+cmake-build-*/
+.vscode/
+.idea/
+*.user
+compile_commands.json
+
+# Serena / editor indexes -- regenerable, and several MB.
+.serena/cache/
+
+*.o
+*.a
+*.so

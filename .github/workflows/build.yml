@@ -1,0 +1,124 @@
+# Builds this module against a clean upstream AzerothCore checkout.
+#
+# This workflow IS the Z-11 acceptance criterion, not a convenience: the module
+# is developed against a mod-playerbots fork on one machine, and the thing most
+# likely to break a published module is a dependency on that fork that nobody
+# noticed. Building against upstream `master` on every push is the only way to
+# find out, and it is why `#ifdef MOD_PLAYERBOTS` guards exist at all.
+#
+# The realm this was written for is irrelevant here by design. If this workflow
+# ever needs a table, a DBC or a config value from that realm to pass, the
+# module has acquired a dependency it is not allowed to have.
+
+name: build
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: worldserver against upstream AC
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out this module
+        uses: actions/checkout@v4
+        with:
+          path: mod-zone-scaling
+
+      # Pinned to a branch rather than a tag: the point is to notice when
+      # upstream moves under us, which a pin to a known-good commit would hide.
+      # A red build here after an upstream change is information, not noise.
+      - name: Check out upstream AzerothCore
+        uses: actions/checkout@v4
+        with:
+          repository: azerothcore/azerothcore-wotlk
+          ref: master
+          path: azerothcore-wotlk
+          fetch-depth: 1
+
+      - name: Drop the module into place
+        run: mv mod-zone-scaling azerothcore-wotlk/modules/mod-zone-scaling
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build clang \
+            libboost-all-dev libssl-dev libmysqlclient-dev \
+            libreadline-dev zlib1g-dev libbz2-dev
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ runner.os }}-${{ github.sha }}
+          restore-keys: ccache-${{ runner.os }}-
+
+      # Tools and the authserver are off: this module contains neither, and a
+      # worldserver that links is the whole claim being tested.
+      - name: Configure
+        working-directory: azerothcore-wotlk
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_INSTALL_PREFIX=$PWD/install \
+            -DSCRIPTS=static \
+            -DMODULES=static \
+            -DTOOLS_BUILD=none \
+            -DBUILD_TESTING=OFF \
+            -DWITH_WARNINGS=ON
+
+      - name: Confirm the module was actually picked up
+        working-directory: azerothcore-wotlk
+        run: |
+          # A module whose sources are silently not globbed still produces a
+          # green build and a worldserver that does nothing. Fail loudly here
+          # instead of shipping that.
+          grep -q 'mod-zone-scaling' build/CMakeCache.txt build/modules/CMakeFiles/* -r \
+            || (echo "::error::mod-zone-scaling was not configured into the build" && exit 1)
+
+      - name: Build worldserver
+        working-directory: azerothcore-wotlk
+        run: cmake --build build --target worldserver -j $(nproc)
+
+      # The strings check is the cheap end of the same question the previous
+      # step asks: are this module's symbols really in the binary? A literal
+      # unique to the module proves the translation units linked, not just
+      # compiled.
+      - name: Confirm the module linked into the binary
+        working-directory: azerothcore-wotlk
+        run: |
+          BIN=$(find build -name worldserver -type f -perm -u+x | head -1)
+          echo "binary: $BIN"
+          for s in "mod-zone-scaling: enabled" "npc_zone_scaling_chrono" "gear banding index"; do
+            if strings "$BIN" | grep -qF "$s"; then
+              echo "ok: $s"
+            else
+              echo "::error::missing literal in worldserver: $s"
+              exit 1
+            fi
+          done
+
+      - name: Check the SQL parses
+        run: |
+          sudo systemctl start mysql || true
+          for f in $(find azerothcore-wotlk/modules/mod-zone-scaling/data/sql -name '*.sql' | sort); do
+            echo "--- $f"
+            # Parse-only: --force would hide errors, so this deliberately does
+            # not use it. No database is created; syntax is what is being tested.
+            mysql --user=root --password=root -e "CREATE DATABASE IF NOT EXISTS ci_sql_check" 2>/dev/null || true
+            mysql --user=root --password=root ci_sql_check < "$f" 2>&1 | tee /tmp/sqlout || true
+            if grep -qi '^ERROR' /tmp/sqlout; then
+              echo "::error::SQL failed to apply: $f"
+              cat /tmp/sqlout
+              exit 1
+            fi
+          done

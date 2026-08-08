@@ -1,0 +1,683 @@
+[worldserver]
+
+########################################
+# mod-zone-scaling configuration
+#
+# Open-world level scaling: mobs, quest rewards and loot present themselves to
+# each player at that player's own level, within a per-zone band.
+#
+# The module ships DISABLED. With ZoneScaling.Enable = 0 nothing in this file
+# has any effect and the server behaves exactly as it would without the module
+# installed.
+########################################
+
+#
+#    ZoneScaling.Enable
+#        Description: Master switch. When 0 the module registers its startup
+#                     hooks, logs one line, and does nothing else.
+#        Default:     0
+#
+
+ZoneScaling.Enable = 0
+
+#
+#    ZoneScaling.DefaultBehaviour
+#        Description: What to do with a zone that has no row in
+#                     mod_zone_scaling_zone.
+#
+#                     off   - never scale unlisted zones. Scaling is strictly
+#                             opt-in, one row at a time.
+#                     clamp - scale unlisted zones to the default band set
+#                             below.
+#
+#                     'off' is the safe default: it means installing the module
+#                     and enabling it still changes nothing until you add a row.
+#
+#                     A zone with a row always wins over this setting, including
+#                     a row with enabled = 0 -- that means "specifically not this
+#                     zone", not "fall through to the default".
+#
+#        Values:      off | clamp
+#        Default:     off
+#
+
+ZoneScaling.DefaultBehaviour = "off"
+
+#
+#    ZoneScaling.Direction
+#        Description: Which way a creature is allowed to move from its own
+#                     level. DefaultBehaviour decides WHETHER a zone scales;
+#                     this decides what scaling MEANS once it does.
+#
+#                     both - full scaling. A creature presents at your level
+#                            whether that is above or below its own. A level 7
+#                            boar is level 60 to a level 60 player, and a level
+#                            60 elite is level 7 to a level 7 player. The whole
+#                            world stays relevant and the whole world stays
+#                            survivable.
+#
+#                     up   - level-up only. A creature below you is raised to
+#                            meet you; a creature already above you is left
+#                            exactly as it is. Low zones keep giving XP and
+#                            usable quests, but a zone you have outlevelled is
+#                            the only thing that changes -- the parts of the
+#                            world that were meant to be dangerous stay
+#                            dangerous, and running into something too big for
+#                            you still means something.
+#
+#                     'up' is the conservative choice and the one that least
+#                     disturbs the levelling curve as designed. 'both' is the
+#                     retail-Legion behaviour and is the default here because it
+#                     is what the module is for.
+#
+#                     Note that a band maximum still applies in both modes: it
+#                     caps how far a creature is raised. Under 'up' it simply
+#                     stops being able to *lower* a creature that was already
+#                     past it.
+#
+#        Values:      both | up
+#        Default:     both
+#
+
+ZoneScaling.Direction = "both"
+
+#
+#    ZoneScaling.Default.MinLevel
+#    ZoneScaling.Default.MaxLevel
+#        Description: The band applied to zones with no row, when
+#                     DefaultBehaviour = clamp. Ignored entirely when it is off.
+#
+#                     1-80 makes the whole world level with the player, which is
+#                     the "one big scaled world" configuration. Narrow it if you
+#                     want unlisted zones to keep some shape.
+#
+#                     An invalid band (min of 0, or min above max) is refused at
+#                     load time and forces DefaultBehaviour back to off.
+#
+#        Default:     1 / 80
+#
+
+ZoneScaling.Default.MinLevel = 1
+ZoneScaling.Default.MaxLevel = 80
+
+#
+#    ZoneScaling.CanonicalLevel
+#        Description: What a creature's OWN level should be, before any player
+#                     is considered. Scaling is always measured relative to
+#                     this, so it sets the baseline the whole module works from.
+#
+#                     native   - whatever the core rolled from the creature's
+#                                template. The world keeps its designed shape.
+#
+#                     midpoint - the midpoint of the creature's zone band. This
+#                                narrows how far anything has to be scaled in
+#                                either direction, which keeps the numbers
+#                                better behaved at the extremes.
+#
+#                     ⚠ 'midpoint' rewrites the actual world for everyone, not
+#                     just for the scaled view. In a 10-60 zone every eligible
+#                     creature really becomes level 35. Combined with
+#                     Direction = up that is a large and permanent difficulty
+#                     increase for low-level players, because nothing will ever
+#                     be lowered back down. Consider the two settings together.
+#
+#                     Excluded creatures are never touched, and no creature is
+#                     moved onto a level with no usable creature_classlevelstats
+#                     data.
+#
+#        Values:      native | midpoint
+#        Default:     native
+#
+
+ZoneScaling.CanonicalLevel = "native"
+
+#
+#    ZoneScaling.ScaleDamage
+#        Description: Normalize damage between players and scaled creatures.
+#                     This is the setting that actually changes fights; with it
+#                     off the module tracks everything and applies nothing.
+#
+#                     The creature's real numbers never move. It keeps one
+#                     health pool and one stat block, shared by everyone
+#                     fighting it. What is scaled is the damage crossing
+#                     between it and each player, in both directions:
+#
+#                       creature -> player   x damage(effective) /
+#                                              damage(canonical)
+#                       player -> creature   x health(canonical) /
+#                                              health(effective)
+#
+#                     The two use different stat curves on purpose. Incoming
+#                     damage should feel like an effective-level creature's
+#                     swing, which is the damage curve. Outgoing damage is
+#                     judged by how much of the health bar it removes, which is
+#                     the health curve. Health and damage do not grow together
+#                     in creature_classlevelstats, so one ratio used both ways
+#                     would be wrong in one direction.
+#
+#                     Consequences worth knowing before you enable it:
+#
+#                       - Combat log numbers differ between two players
+#                         fighting the same creature. This is inherent to
+#                         per-player scaling and retail behaves the same way.
+#                       - The health bar is a percentage, so both players see
+#                         it deplete coherently, but the absolute HP number is
+#                         a single canonical value rather than a per-player one.
+#                       - Pets, guardians and totems inherit their owner's
+#                         ratio, so they are neither exempt nor double-scaled.
+#
+#                     Use `.zs ratio` to see the exact multipliers for any
+#                     pairing before committing to a band.
+#
+#        Default:     1
+#
+
+ZoneScaling.ScaleDamage = 1
+
+#
+#    ZoneScaling.ScaleHitChance
+#        Description: Make the melee hit table use the effective level too.
+#
+#                     Without this, ScaleDamage alone does not produce a fair
+#                     fight. Melee skill in this core is level * 5, taken from
+#                     the creature's canonical level, so a level 8 creature
+#                     presenting at 60 swings with skill 40 against a player's
+#                     defence 300 — it misses most of the time, and however
+#                     large its damage multiplier is, that damage rarely lands.
+#
+#                     This corrects miss, dodge, parry and block. It cannot
+#                     correct glancing or crushing blows: the core gates those
+#                     on raw levels, after this hook and out of reach of it.
+#                     The residual is small next to miss, and is documented in
+#                     the README under Limitations.
+#
+#                     Turn this off if the hit rates feel wrong; ScaleDamage
+#                     will keep working on its own, less accurately.
+#
+#        Default:     1
+#
+
+ZoneScaling.ScaleHitChance = 1
+
+#
+#    ZoneScaling.ScaleLevelDisplay
+#        Description: Show each player the creature's effective level, on the
+#                     nameplate and in the tooltip, rather than its real one.
+#
+#                     Two players fighting the same creature see two different
+#                     numbers and two different con colours at the same time.
+#                     Nothing about the creature changes; the client is simply
+#                     sent a different value, and a stock client is required.
+#
+#                     Leave this on whenever ScaleDamage is on. The two are
+#                     independent switches but not independent features: with
+#                     damage scaled and the display off, the nameplate says
+#                     "Level 8" for something hitting like a 60, the con colour
+#                     is grey, and every judgement the client helps a player
+#                     make is wrong. Turning it off is only sensible if you
+#                     want to see the world's real levels while debugging.
+#
+#                     Cost is a compare per field per unit update, plus a grid
+#                     search each time a player levels up — the latter to
+#                     refresh mobs already on screen, which would otherwise
+#                     keep the number they were sent when they spawned.
+#
+#        Default:     1
+#
+
+ZoneScaling.ScaleLevelDisplay = 1
+
+#
+#    ZoneScaling.AggroRange
+#        Description: How proximity aggro range is handled in a scaled zone.
+#
+#                     Read this before switching it on. It is the one setting
+#                     in this module that cannot do what you probably want, and
+#                     the reason is structural rather than temporary.
+#
+#                     AzerothCore computes aggro radius as
+#                       detectionRange - (playerLevel - creatureLevel)
+#                     clamped to [5, 45]. The correct behaviour under scaling
+#                     would use the level the creature *presents at*, which is
+#                     the player's own, so the level term would vanish and
+#                     everyone would be aggroed at the same distance. That is
+#                     not reachable from a module: there is no script hook on
+#                     Creature::GetAggroRange, on GetAttackDistance, or on
+#                     CanStartAttack, and getLevelForTarget cannot be
+#                     overridden from outside the core. This module does not
+#                     edit the core, so it cannot fix the player's-level term.
+#
+#                     What it can fix is the creature's-level term, by folding
+#                     each creature's distance from its band midpoint into its
+#                     own detection range. That is what "normalize" does.
+#
+#                     "stock"     - leave detection_range exactly as the
+#                                   creature template has it. In a scaled zone
+#                                   this means a level-8 boar grabs a level-60
+#                                   player at 5 yards while the level-25 ogre
+#                                   beside it reaches 22, for no reason the
+#                                   player can see in the world.
+#
+#                     "normalize" - every creature in a zone aggroes a given
+#                                   player at the same distance, whatever its
+#                                   own level. Residual error against the ideal
+#                                   is |playerLevel - bandMidpoint| yards, the
+#                                   same for every creature in the zone, and
+#                                   zero for a player in the middle of the band.
+#
+#                     `.zs aggro <entry> <zoneId> <playerLevel> [canonLevel]`
+#                     prints all three radii — stock, normalized and ideal — so
+#                     the trade can be measured on your own bands before it is
+#                     taken. It works while this is still set to "stock".
+#
+#                     Two caveats. This writes to creature state rather than
+#                     presenting a per-player view, so unlike ScaleLevelDisplay
+#                     it is visible to everyone at once. And switching it ON at
+#                     runtime reaches each creature only when it next respawns
+#                     or its grid reloads; switching it off restores every
+#                     creature as it leaves the world, and immediately on a
+#                     restart.
+#
+#        Default:     "stock"
+#
+
+ZoneScaling.AggroRange = "stock"
+
+#
+#    ZoneScaling.Maps.*
+#        Description: Which kinds of map may scale at all. Each is an
+#                     independent switch and instanced content is opt-in.
+#
+#                     This exists because zone bands are keyed on zone id, and
+#                     a zone id says nothing about where you are standing. A
+#                     dungeon has a zone id like anywhere else, so
+#                     `DefaultBehaviour = clamp` — which means "scale every
+#                     zone without a row" — would otherwise sweep in every
+#                     five-man and raid on the realm without ever being asked
+#                     to. That is not a milder version of open-world scaling:
+#                     instanced encounters are hand-tuned, their difficulty is
+#                     the entire point, and flattening them to a levelling band
+#                     breaks content nobody pointed this module at.
+#
+#                     World  — the open world. The case this module is for.
+#                     Dungeon — MAP_INSTANCE, i.e. five-mans, normal and heroic.
+#                     Raid   — MAP_RAID.
+#                     Battleground / Arena — PvP instances. Creatures there are
+#                              mostly NPCs that are already excluded by rule,
+#                              but the switches exist so that "all zones" never
+#                              silently means "and also arenas".
+#
+#                     Turning Dungeon or Raid on is supported and logs a warning
+#                     at startup. It is not a tested configuration, and no
+#                     encounter script is aware of it — a boss whose script
+#                     assumes a level will not agree with what players see.
+#
+#                     Note this gate is checked independently on every path that
+#                     can touch a creature, including the level rewrite done by
+#                     CanonicalLevel = midpoint. Turning a kind off is therefore
+#                     sufficient on its own; you do not also need to remove
+#                     bands for its zones.
+#
+#        Default:     1 / 0 / 0 / 0 / 0
+#
+
+ZoneScaling.Maps.World = 1
+ZoneScaling.Maps.Dungeon = 0
+ZoneScaling.Maps.Raid = 0
+ZoneScaling.Maps.Battleground = 0
+ZoneScaling.Maps.Arena = 0
+
+#
+#    ZoneScaling.PreserveEliteOffset
+#        Description: Let elites and rares present a few levels above the band,
+#                     so they still read as dangerous after scaling.
+#
+#                     Scaling flattens a zone by construction — everything
+#                     presents at your level — and that erases the one signal a
+#                     player reads before pulling: that the rare elite on the
+#                     ridge is a harder fight than the boars beside it. The rank
+#                     multipliers on health and damage survive scaling by
+#                     themselves, so the fight is still harder; it is the
+#                     nameplate and con colour that stop saying so.
+#
+#                     The offset is taken from the world data rather than
+#                     invented per rank: it is how far the creature's own level
+#                     sits above its band's midpoint, capped by .Max below. A
+#                     creature the data does not mark as unusual for its zone
+#                     gets no offset. Normal-rank creatures never get one, and
+#                     world bosses are excluded from scaling entirely.
+#
+#                     The result is also capped by the highest level with usable
+#                     creature_classlevelstats data, so an offset near the top
+#                     of a band cannot push a creature past the end of the stat
+#                     tables.
+#
+#        Default:     1
+#
+
+ZoneScaling.PreserveEliteOffset = 1
+
+#
+#    ZoneScaling.PreserveEliteOffset.Max
+#        Description: Largest offset PreserveEliteOffset may apply, in levels.
+#                     3 matches the usual retail feel for a rare elite. 0
+#                     disables the feature as surely as the switch above.
+#
+#        Default:     3
+#
+
+ZoneScaling.PreserveEliteOffset.Max = 3
+
+#
+#    ZoneScaling.Chrono.Enable
+#        Description: Whether level scaling is a per-player choice ("Chrono
+#                     Mode") rather than a property of the realm.
+#
+#                     0 — scaling applies to every player in a scaled zone.
+#                         This is how the module behaved before the option
+#                         existed, and it is the default so that installing
+#                         this feature changes nothing by itself.
+#                     1 — each character carries a flag. A character with the
+#                         flag off fights every creature at its own level,
+#                         sees its real level on the nameplate, and is
+#                         entirely unaffected by zone bands.
+#
+#                     Players toggle it with .chrono on / .chrono off, and
+#                     only while out of combat and in an inn or capital city.
+#                     That restriction is the exploit guard: without it, an
+#                     opted-in player losing a scaled fight could flip the
+#                     creature trivial mid-pull, and someone could tag a weak
+#                     creature, opt in, and kill it for the scaled reward.
+#
+#                     Requires mod_zone_scaling_character in your CHARACTERS
+#                     database — see data/sql/db-characters/base/. If the
+#                     table is missing the module logs an error and behaves as
+#                     though this option were 0, so a forgotten SQL file costs
+#                     you the opt-in rather than the scaling.
+#
+#                     Two things do not follow the flag, because they are not
+#                     per-player and cannot be made so: AggroRange = normalize
+#                     writes to the creature, and CanonicalLevel = midpoint
+#                     changes its real level at spawn. An opted-out player
+#                     still meets both.
+#
+#        Default:     0
+#
+
+ZoneScaling.Chrono.Enable = 0
+
+#
+#    ZoneScaling.Chrono.Default
+#        Description: What a character with no stored choice does. Ignored
+#                     unless Chrono.Enable is 1.
+#
+#                     0 — not scaled until the player runs '.chrono on'.
+#                         True opt-in, as retail war mode is. Note what this
+#                         means on the day you enable Chrono: nobody has a
+#                         stored choice yet, so *every* character stops being
+#                         scaled at their next login, and your zone bands stop
+#                         having any visible effect until players opt in. The
+#                         module warns about this at every startup, not just
+#                         the first.
+#                     1 — scaled unless the player runs '.chrono off'. Opt-out
+#                         instead. Choose this if scaling is meant to be the
+#                         realm's normal state and the flag is an escape
+#                         hatch; it is the setting that does not change what
+#                         anyone experiences on the day you turn Chrono on.
+#
+#                     Changing this later moves only the players who have
+#                     never toggled. A stored choice always wins.
+#
+#        Default:     0
+#
+
+ZoneScaling.Chrono.Default = 0
+
+#
+#    ZoneScaling.Chrono.XpBonus
+#        Description: Percent added to every experience award a Chrono opt-in
+#                     receives, as the reward for choosing the harder realm.
+#                     0 disables the bonus.
+#
+#                     Applies to kills, quests, exploration and battlegrounds
+#                     alike -- it is a property of the player's choice, not of
+#                     what they killed -- and is applied after every other
+#                     correction in this module.
+#
+#                     Only paid when Chrono Mode is genuinely active, meaning
+#                     ZoneScaling.Chrono.Enable = 1 *and* the characters-DB
+#                     table exists. On a realm with no opt-in there is nobody
+#                     who has chosen anything, and paying a permanent XP bonus
+#                     to the whole realm is not a sensible reading of that.
+#
+#                     Capped at 1000. A mistyped value here is a realm-wide XP
+#                     rate change that no Rate.XP.* setting explains.
+#
+#        Default:     10
+#
+
+ZoneScaling.Chrono.XpBonus = 10
+
+#
+#    ZoneScaling.Xp.Enable
+#        Description: Correct experience awards to match the level a creature
+#                     or quest was actually fought at.
+#
+#                     Leave this on. Scaling creatures up without this makes an
+#                     outlevelled zone harder *and* still worthless, which is
+#                     strictly worse than not installing the module. Setting it
+#                     to 0 while scaling is enabled logs a warning every
+#                     startup for that reason.
+#
+#                     Has no effect when ZoneScaling.Enable = 0.
+#
+#        Default:     1
+#
+
+ZoneScaling.Xp.Enable = 1
+
+#
+#    ZoneScaling.Xp.GreyKills
+#        Description: Pay experience for a creature that is grey at its
+#                     canonical level but is being fought at the player's own
+#                     level.
+#
+#                     This is the case the module exists for -- a level 40
+#                     player in Elwynn has a grey level of 31, so every
+#                     creature in the zone is below it and stock AzerothCore
+#                     pays nothing for any of them, however hard they have been
+#                     made to hit.
+#
+#                     It is also the riskiest code in this module. When the
+#                     stock award is zero the core never calls the hook that
+#                     would let a module correct it, so this half reimplements
+#                     part of the kill reward pipeline -- the eligibility
+#                     rules, the group share, the static multipliers -- rather
+#                     than adjusting a value the core handed over. That is a
+#                     maintenance liability against future core changes, and it
+#                     is a separate switch so it can be turned off on its own
+#                     while ZoneScaling.Xp.Enable stays on.
+#
+#                     Symptoms of it having gone wrong are visible in
+#                     '.zs status', which reports corrected and topped-up kills
+#                     as separate counters.
+#
+#        Default:     1
+#
+
+ZoneScaling.Xp.GreyKills = 1
+
+#
+#    ZoneScaling.Xp.Quests
+#        Description: Correct quest experience for quests whose zone is scaled,
+#                     by pricing the quest at the level its zone presents at.
+#
+#                     Two kinds of quest are deliberately left alone: one whose
+#                     level is -1, because it already tracks the player and
+#                     there is nothing to correct; and one whose ZoneOrSort is
+#                     negative, because that is a class or profession bucket
+#                     rather than a zone id and no band applies to it.
+#
+#                     Quest *gold* is not touched and does not need to be:
+#                     AzerothCore already looks the reward up by the player's
+#                     level rather than the quest's.
+#
+#        Default:     1
+#
+
+ZoneScaling.Xp.Quests = 1
+
+#
+#    ZoneScaling.Loot.Enable
+#        Description: Master switch for the loot corrections below. 0 leaves
+#                     coin and gear exactly as the creature template and the
+#                     loot tables produced them.
+#
+#                     Separate from ZoneScaling.Xp.Enable because the two fail
+#                     differently. Uncorrected experience makes a scaled zone
+#                     pointless; uncorrected coin merely makes it stingy.
+#
+#        Default:     1
+#
+
+ZoneScaling.Loot.Enable = 1
+
+#
+#    ZoneScaling.Loot.Money
+#        Description: Scale a scaled creature's coin drop to its effective
+#                     level. Coin comes from creature_template.mingold/maxgold
+#                     and is fixed per entry -- Loot::generateMoneyLoot never
+#                     looks at a level -- so without this a creature scaled from
+#                     8 to 40 still drops a level-8 creature's copper.
+#
+#                     The multiplier is the ratio of the quest_money_reward
+#                     table at the two levels. That table is Blizzard's own
+#                     per-level statement of what a copper reward is worth, it
+#                     is already loaded, and it is complete and non-decreasing
+#                     for levels 1-80 on a stock world DB. This module ships no
+#                     coin curve of its own.
+#
+#                     KNOWN OVERSHOOT, stated rather than fudged. Measured
+#                     against the mean coin of non-elite fixed-level creatures
+#                     in the shipped creature_template:
+#
+#                         levels     creature data     quest_money_reward
+#                         10 -> 20        3.9x                3.6x
+#                         10 -> 40       20.7x               14.0x
+#                         10 -> 60       22.8x               28.0x
+#                         10 -> 80      116.0x              232.0x
+#
+#                     Close through the classic range, roughly twice as generous
+#                     at level 80, because the WotLK end of quest_money_reward
+#                     inflates harder than creature coin does. Use `.zs coin
+#                     <from> <to>` to see the multiplier for any pair of levels
+#                     before switching this on, and Loot.MoneyMax to cap it.
+#
+#                     ⚠ In a group the *money* each member receives is correct
+#                     for their own effective level, but the "Your share is..."
+#                     chat line shows the group average. AzerothCore computes
+#                     one share and sends the same number to everyone, with no
+#                     hook between the split and the packet, and this module
+#                     does not edit the core. Solo looting is exact in both.
+#
+#        Default:     1
+#
+
+ZoneScaling.Loot.Money = 1
+
+#
+#    ZoneScaling.Loot.MoneyMax
+#        Description: Largest coin multiplier allowed, in either direction --
+#                     the reciprocal is used as the floor when scaling down.
+#
+#                     The shipped default is generous rather than tight. The
+#                     money curve really does say a level-80 kill is worth some
+#                     770x a level-5 one, and a number that large is a judgement
+#                     about your realm's economy, not an error to be silently
+#                     corrected. Lower this if the honest number is too rich.
+#
+#                     Values below 1.0 are raised to 1.0.
+#
+#        Default:     50.0
+#
+
+ZoneScaling.Loot.MoneyMax = 50.0
+
+#
+#    ZoneScaling.Loot.Gear
+#        Description: Replace a scaled creature's equipment drops with items of
+#                     the same slot, subclass and quality at the effective
+#                     level, drawn from an index built over item_template. No
+#                     new tables; nothing is written to your world DB.
+#
+#                     ⚠ OFF BY DEFAULT, and it is a much larger claim than coin:
+#                     it rewrites *which items the world drops*. A realm that
+#                     switches this on stops being one where a particular mob
+#                     drops a particular sword. Coin is arithmetic; this is
+#                     content. Decide deliberately.
+#
+#                     Never substituted: quest drops, quest starters, items with
+#                     loot conditions, free-for-all items, and anything below
+#                     uncommon quality. Never used as a replacement: uniques,
+#                     heirlooms, and profession, reputation or PvP rewards.
+#
+#                     Loot is rolled once per corpse, for the round-robin
+#                     looter, at the moment of death. So in a group the gear
+#                     bands to *that* member's level rather than to each
+#                     looter's -- per-looter gear is not expressible on
+#                     AzerothCore's loot model at all.
+#
+#                     Use `.zs gear <itemId> <level>` to see what it would do.
+#
+#        Default:     0
+#
+
+ZoneScaling.Loot.Gear = 0
+
+#
+#    ZoneScaling.Loot.Gear.Tolerance
+#        Description: How many levels either side of the effective level a
+#                     replacement may require, and equally how close an item's
+#                     own required level must already be for it to be left
+#                     alone.
+#
+#                     Larger values find a candidate more often and band less
+#                     precisely. Smaller values are precise but will decline on
+#                     thinly populated slots -- common ones, at higher levels.
+#
+#        Default:     5
+#
+
+ZoneScaling.Loot.Gear.Tolerance = 5
+
+#
+#    ZoneScaling.Loot.Gear.MaxQuality
+#        Description: Highest item quality that will be rebanded: 2 uncommon,
+#                     3 rare, 4 epic. Values outside 2-4 are clamped.
+#
+#                     The default stops below epic on purpose. Epics that drop
+#                     from open-world creatures are almost always deliberate --
+#                     a rare spawn's signature item, a world drop with a story
+#                     attached -- and replacing them with a generic equivalent
+#                     of the right level destroys something a player noticed.
+#
+#        Default:     3
+#
+
+ZoneScaling.Loot.Gear.MaxQuality = 3
+
+#
+#    ZoneScaling.Debug
+#        Description: Verbose logging to the module.zonescaling logger --
+#                     every scaling decision, per creature. Extremely noisy;
+#                     intended for use with a single zone enabled.
+#
+#                     Output goes to the module.zonescaling logger, which
+#                     inherits from Logger.module if your worldserver.conf
+#                     defines one. To control it separately, add:
+#                       Logger.module.zonescaling = 4,Console Server
+#
+#        Default:     0
+#
+
+ZoneScaling.Debug = 0
