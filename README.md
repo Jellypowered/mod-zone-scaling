@@ -68,9 +68,12 @@ the code, so being re-applied when the file changes is the wanted behaviour. The
 module's *own* tables use `CREATE TABLE IF NOT EXISTS` for the opposite reason:
 they hold hand-authored bands that must survive an update.
 
-There is also `data/sql/db-world/optional/mod_zone_scaling_chrono_npc.sql`,
-which the updater does **not** apply automatically. See "A gossip NPC, if you
-want one" below.
+There is also `optional-sql/mod_zone_scaling_chrono_npc.sql`, which creates an
+example NPC. It lives **outside `data/sql/`** so that the updater will not apply
+it — AzerothCore walks a module's `data/sql/db-world` recursively and has no
+notion of an "optional" subdirectory, so a file placed in
+`data/sql/db-world/optional/` is installed on the next startup just like one in
+`base/`. Run it yourself if you want it. See "A gossip NPC, if you want one".
 
 Then edit `mod_zone_scaling.conf` in your config directory. The module ships
 disabled; nothing changes until you set `ZoneScaling.Enable = 1` **and** add at
@@ -188,7 +191,7 @@ changes. Two ways to get one:
 ```sql
 -- 1. the example NPC: entry 190000, "Keeper of Hours"
 --    (not applied automatically; run it yourself)
-mysql -u acore -p acore_world < data/sql/db-world/optional/mod_zone_scaling_chrono_npc.sql
+mysql -u acore -p acore_world < optional-sql/mod_zone_scaling_chrono_npc.sql
 -- then, in-game, at an inn:  .npc add 190000
 
 -- 2. or attach it to an innkeeper you already have

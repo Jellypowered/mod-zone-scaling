@@ -1,9 +1,17 @@
 --
 -- mod-zone-scaling -- OPTIONAL: an example Chrono Mode NPC
 --
--- This file is under data/sql/db-world/optional/ and AzerothCore's updater does
--- NOT apply it automatically. Nothing in this module depends on it. Apply it by
--- hand only if you want the example NPC:
+-- ⚠ This file lives in `optional-sql/`, OUTSIDE `data/sql/`, and that location is
+-- load-bearing. AzerothCore's updater takes `modules/<mod>/data/sql/db-world`
+-- and walks it RECURSIVELY, ten levels deep -- see `FillFileListRecursively` in
+-- `src/server/database/Updater/UpdateFetcher.cpp`. There is no such thing as an
+-- "optional" subdirectory under `data/sql/`: a file put in
+-- `data/sql/db-world/optional/` is applied on the next startup exactly like one
+-- in `base/`. This file was in that directory once and was silently installed on
+-- the development realm, which is how the rule was learned. Do not move it back.
+--
+-- Nothing in this module depends on it. Apply it by hand only if you want the
+-- example NPC:
 --
 --     mysql -u acore -p acore_world < mod_zone_scaling_chrono_npc.sql
 --
