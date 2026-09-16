@@ -45,7 +45,7 @@ per-observer field patch path to modules
 
 ```bash
 cd azerothcore-wotlk/modules
-git clone https://github.com/<owner>/mod-zone-scaling.git
+git clone https://github.com/firstoni-dev/mod-zone-scaling.git
 cd ../build && cmake .. && make -j$(nproc) && make install
 ```
 
@@ -55,6 +55,7 @@ Apply to your **world** database:
 |---|---|
 | `data/sql/db-world/base/mod_zone_scaling_base.sql` | the module's own tables — required |
 | `data/sql/db-world/base/mod_zone_scaling_commands.sql` | help text for `.help zs`, `.help zs ratio` and the rest — required |
+| `data/sql/db-world/updates/*.sql` | column additions for installs made before the per-zone `direction` and `ignore_chrono` columns existed — a fresh install gets them from the base file |
 
 And, only if you intend to use Chrono Mode,
 `data/sql/db-characters/base/mod_zone_scaling_character.sql` to your
@@ -75,6 +76,12 @@ notion of an "optional" subdirectory, so a file placed in
 `data/sql/db-world/optional/` is installed on the next startup just like one in
 `base/`. Run it yourself if you want it. See "A gossip NPC, if you want one".
 
+**Optional core patch.** One documented limitation — glancing and crushing
+blows deciding on the creature's real level — needs a two-line change in the
+core that a module cannot make. It is in `patches/`, it is a no-op on a core
+without this module, and the reasoning is under "Glancing and crushing blows:
+the optional core patch" below. Skip it and everything else works.
+
 Then edit `mod_zone_scaling.conf` in your config directory. The module ships
 disabled; nothing changes until you set `ZoneScaling.Enable = 1` **and** add at
 least one row to `mod_zone_scaling_zone`.
@@ -89,6 +96,7 @@ that matter on first run:
 | `ZoneScaling.Enable` | `0` | master switch |
 | `ZoneScaling.DefaultBehaviour` | `off` | whether zones absent from the table scale at all |
 | `ZoneScaling.Direction` | `both` | whether scaling may lower a creature, or only raise it |
+| `ZoneScaling.TargetOffset` | `0` | how many levels below the player a scaled creature lands (3-4 for an Ascension feel) |
 | `ZoneScaling.CanonicalLevel` | `native` | what a creature's own level is, before any player is considered |
 | `ZoneScaling.ScaleDamage` | `1` | normalize damage between players and scaled creatures |
 | `ZoneScaling.ScaleHitChance` | `1` | make the melee hit table use the effective level too |
@@ -103,6 +111,7 @@ that matter on first run:
 | `ZoneScaling.PreserveEliteOffset.Max` | `3` | how far above, in levels |
 | `ZoneScaling.Chrono.Enable` | `0` | make scaling a per-player choice rather than a realm state |
 | `ZoneScaling.Chrono.Default` | `0` | what a character who has never chosen does |
+| `ZoneScaling.Chrono.BotDefault` | `-1` | the same question for playerbots; `-1` follows `Chrono.Default` |
 | `ZoneScaling.Chrono.XpBonus` | `10` | percent added to every XP award a Chrono opt-in receives |
 | `ZoneScaling.Xp.Enable` | `1` | correct XP to match the level content was fought at |
 | `ZoneScaling.Xp.GreyKills` | `1` | pay for a creature that is grey at its own level but is being fought at yours |
@@ -171,6 +180,15 @@ decision is more consequential than it looks:
 
 Changing this later moves everyone who has never chosen, live, without a
 restart or a relog. A stored choice always wins.
+
+**Playerbots** get their own answer through `Chrono.BotDefault`. A bot never
+runs `.chrono`, so for a bot the default is the choice, and the useful pairing
+is `Chrono.Default = 0` with `Chrono.BotDefault = 1`: people opt in, the bots
+that populate the world are always scaled. A bot is recognised by its session
+having no remote address, which is how mod-playerbots creates every bot
+session; the module does not link against the playerbots module and builds
+unchanged on a core without it. Bots are never paid the Chrono XP bonus, since
+they did not choose anything.
 
 Requires `mod_zone_scaling_character` in your **characters** database. If it is
 missing the module logs an error and behaves as though Chrono were off — so a
@@ -251,6 +269,23 @@ already past it. Its minimum is likewise unaffected — in a 10-60 zone a level-
 critter presents at 10 even to a level-5 player, under either direction,
 because that is the floor doing its documented job.
 
+### A little below you, not exactly at you
+
+`TargetOffset` shifts the whole thing down by a fixed number of levels. At `3`,
+a creature that would have presented at your level presents three below it
+instead: green rather than yellow, still worth XP and still questable, but a
+worse place to farm than content at your own level — the behaviour Project
+Ascension shipped for its outlevelled zones. The elite offset stacks on top, so
+a rare elite in that zone presents at or just above your level while the trash
+beside it sits under you, which is the signal `PreserveEliteOffset` exists to
+keep.
+
+The offset is applied to your level before the band clamp and before the
+direction rule, and it is capped at 10: past the grey threshold a scaled
+creature pays no XP, which defeats the purpose. Damage, hit tables, the
+nameplate and the reward corrections all read the same offset number, so
+nothing has to be tuned twice.
+
 ## What a creature's own level is
 
 Everything above is measured relative to a creature's **canonical level** — its
@@ -319,8 +354,38 @@ skill 40 into a player's defence 300: it misses most of the time, and however
 large its damage multiplier is, that damage rarely lands. Scaling the damage
 number alone does not produce a fair fight.
 
-`ScaleHitChance` corrects miss, dodge, parry and block. It cannot correct
-glancing or crushing blows — see Limitations.
+`ScaleHitChance` corrects miss, dodge, parry and block. Glancing and crushing
+blows need one small core change on top — see the next section.
+
+### Glancing and crushing blows: the optional core patch
+
+The core decides *whether* a glancing or crushing blow may happen with a raw
+level comparison, and only then works out *how likely* it is from the four
+skill values the hook lets a module correct. So with the module alone the odds
+are right but the gate is wrong: a level-60 player fighting a level-8 creature
+presented at 63 (an elite with the offset) should glance a quarter of the time
+and never does, because the gate still sees level 8. Under `Direction = both`
+the mismatch runs the other way and a lowered creature hands out glancing
+blows that should not exist.
+
+`patches/azerothcore-melee-outcome-gates.patch` rewrites those two gates in
+terms of the values the hook already receives. `GetMaxSkillValueForLevel` is
+defined as `getLevelForTarget * 5`, so with no module loaded the patch changes
+nothing at all — the world-boss rule included — and with this module loaded the
+gates follow the effective level like everything else. It is two expressions
+in `Unit::RollMeleeOutcomeAgainst`:
+
+```bash
+cd azerothcore-wotlk
+git apply modules/mod-zone-scaling/patches/azerothcore-melee-outcome-gates.patch
+```
+
+It applies cleanly to upstream `master` and to the mod-playerbots fork. The
+patch is optional; the module builds and runs without it and simply keeps the
+limitation described below. What the patch does not touch is the glancing
+*damage* reduction, which the core still computes from the raw level gap: with
+the gate fixed that is at worst a 30% reduction where the offset would have
+asked for 10-30%, a rounding matter rather than a fairness one.
 
 `.zs ratio` shows the exact multipliers for any pairing, without a fight or even
 a creature in the zone.
@@ -562,13 +627,15 @@ module work removes them:
   creature's real level at spawn. An opted-out player still meets both. Neither
   changes a fight's difficulty the way damage does, but "opted out means
   nothing about you is scaled" would be a slightly false promise.
-- **Glancing and crushing blows are not scaled.** The core gates both on raw
-  levels read after the melee-outcome hook, with nothing exposing the gate, so
-  no module can reach them. A high-level player never glances against a
-  scaled-up low-level creature, and that creature never crushes. The effect is
-  second-order next to miss chance — player damage is slightly overstated and
-  creature damage slightly understated — but it is real and it is permanent
-  without a core patch.
+- **Glancing and crushing blows are gated on the real level unless the core
+  patch is applied.** The core decides whether either outcome may happen from
+  a raw level comparison made after the melee-outcome hook. Without
+  `patches/azerothcore-melee-outcome-gates.patch`, an elite presented above
+  the player never glances and a creature lowered under `Direction = both`
+  glances when it should not. With `Direction = up` and no elite offset the
+  gates happen to agree with stock, so the loss is confined to elites. The
+  probabilities themselves are already correct either way. See "Glancing and
+  crushing blows" above.
 - **Only melee hit chance is corrected.** Spell hit and resistance still use
   canonical levels.
 - **The grey-kill top-up reimplements core logic.** It has to: when the stock

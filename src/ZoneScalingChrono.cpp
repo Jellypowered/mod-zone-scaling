@@ -77,6 +77,50 @@ ZoneScalingPlayerState* ZoneScalingMgr::GetPlayerState(Player const* player)
                   : nullptr;
 }
 
+bool ZoneScalingMgr::IsScalingActiveFor(Player const* player, uint32 zoneId) const
+{
+    // Checked before the player's flag rather than after, because the question
+    // this answers is about the zone, not the person: in a zone that cannot be
+    // played unscaled there is nothing for the flag to mean.
+    //
+    // No map is passed to GetBand here. The instanced-map guard exists to stop
+    // the DEFAULT band leaking into instances, and a zone reaching this line
+    // with IgnoreChrono set necessarily has an explicit row -- the default band
+    // never carries the flag.
+    if (ZoneScalingBand const* band = GetBand(zoneId))
+        if (band->IgnoreChrono)
+            return true;
+
+    return IsScalingActiveFor(player);
+}
+
+bool ZoneScalingMgr::IsBotPlayer(Player const* player)
+{
+    if (!player)
+        return false;
+
+    // Non-const on purpose: WorldSession::GetRemoteAddress is not const-qualified
+    // on every core this builds against, and Player::GetSession() const hands
+    // back a mutable pointer anyway.
+    WorldSession* session = player->GetSession();
+    if (!session)
+        return false;
+
+    // Upstream leaves the address empty for a socketless session; the
+    // mod-playerbots fork writes the literal "bot" (WorldSession.cpp, the
+    // `else if (isBot)` branch of the constructor). Either means no client.
+    std::string const& address = session->GetRemoteAddress();
+    return address.empty() || address == "bot";
+}
+
+bool ZoneScalingMgr::ChronoDefaultFor(Player const* player) const
+{
+    if (_chronoBotDefault >= 0 && IsBotPlayer(player))
+        return _chronoBotDefault != 0;
+
+    return _chronoDefault;
+}
+
 bool ZoneScalingMgr::IsScalingActiveFor(Player const* player) const
 {
     // The fast exit, and the common one: with Chrono off there is no lookup at
@@ -97,7 +141,7 @@ bool ZoneScalingMgr::IsScalingActiveFor(Player const* player) const
     // opt-out, and a realm-wide opt-out is indistinguishable from the module
     // being broken.
     if (!state || !state->Loaded)
-        return _chronoDefault;
+        return ChronoDefaultFor(player);
 
     // A character who has never chosen follows the realm's default *now*, not
     // the default as it stood when they logged in. Reading the cached copy
@@ -106,7 +150,7 @@ bool ZoneScalingMgr::IsScalingActiveFor(Player const* player) const
     // difference that presents as scaling working for some players and not
     // others. A stored choice still wins; that is what Explicit distinguishes.
     if (!state->Explicit)
-        return _chronoDefault;
+        return ChronoDefaultFor(player);
 
     return state->Enabled;
 }
@@ -121,7 +165,7 @@ void ZoneScalingMgr::OnPlayerLogin(Player* player) const
 
     state->Loaded   = true;
     state->Explicit = false;
-    state->Enabled  = _chronoDefault;
+    state->Enabled  = ChronoDefaultFor(player);
 
     // Attach state even when Chrono is inactive, so that `.chrono` can answer
     // coherently and so that switching Chrono on with `.reload config` does not

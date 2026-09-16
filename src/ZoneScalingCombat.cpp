@@ -157,7 +157,7 @@ Optional<uint8> ZoneScalingMgr::GetEffectiveLevelFor(Creature* creature, Player 
     // how many fights were really left stock by a player's choice, and counting
     // pairings that would not have moved anyway would inflate it with noise
     // from every creature already at the player's level.
-    if (!IsScalingActiveFor(player))
+    if (!IsScalingActiveFor(player, state->ZoneId))
     {
         CountChronoSuppressed();
         return std::nullopt;

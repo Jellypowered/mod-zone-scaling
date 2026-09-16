@@ -39,9 +39,15 @@ enum ZoneScalingDirection : uint8
 {
     ZS_DIR_BOTH = 0,    // full scaling -- the creature presents at the player's
                         // level whether that is above or below its own
-    ZS_DIR_UP   = 1     // level-up only -- a creature below the player is
+    ZS_DIR_UP   = 1,    // level-up only -- a creature below the player is
                         // raised to meet them; one already above them is left
                         // alone, so a zone keeps its dangerous corners
+
+    ZS_DIR_INHERIT = 2  // per-zone bands only, never the global setting: use
+                        // whatever ZoneScaling.Direction says. Imported content
+                        // built for a higher level cap has to scale DOWN in its
+                        // own zones while the open world stays level-up-only,
+                        // and one global value cannot express both.
 };
 
 // Which kind of map a creature is standing on.
@@ -93,6 +99,19 @@ struct ZoneScalingBand
     uint8  MinLevel = 0;
     uint8  MaxLevel = 0;
     bool   Enabled  = false;
+
+    // Per-zone override of ZoneScaling.Direction. Imported content built for a
+    // higher level cap needs to scale DOWN in its own zones while the open
+    // world stays level-up-only, and one global setting cannot say both.
+    ZoneScalingDirection Direction = ZS_DIR_INHERIT;
+
+    // Whether this zone scales even for a player who has opted out of Chrono
+    // Mode. Chrono is a preference about the OPEN WORLD, where fighting at
+    // native levels is a legitimate way to play. Imported content authored for
+    // a higher level cap has no such reading: opted out, its creatures are
+    // simply unreachable, and the zone is not "unscaled" but broken. A zone
+    // that cannot be played unscaled sets this.
+    bool IgnoreChrono = false;
 
     [[nodiscard]] uint8 Clamp(uint8 playerLevel) const
     {
@@ -339,14 +358,24 @@ public:
 
     [[nodiscard]] std::size_t GetBandCount() const { return _bands.size(); }
     [[nodiscard]] std::size_t GetExclusionCount() const { return _excluded.size(); }
+    [[nodiscard]] std::size_t GetForcedCount() const { return _forced.size(); }
 
     // Resolve a zone's band. Returns nullptr when the zone is not scaled --
     // either it has no row and DefaultBehaviour is off, or its row is
     // disabled. Callers must treat nullptr as "leave everything stock".
-    [[nodiscard]] ZoneScalingBand const* GetBand(uint32 zoneId) const;
+    // `map`, when given, suppresses the DefaultBehaviour fallthrough on
+    // instanced maps -- see the comment in the definition. Diagnostic callers
+    // that only have a zone id may omit it.
+    [[nodiscard]] ZoneScalingBand const* GetBand(uint32 zoneId, Map const* map = nullptr) const;
 
     // The level a creature in this zone presents at, for a player of this
     // level. std::nullopt means "this zone is not scaled".
+    //
+    // The player's level is first lowered by ZoneScaling.TargetOffset (see
+    // TargetLevelFor), then clamped to the band, then the elite offset and the
+    // direction rule are applied. Every consumer -- damage, the hit table, the
+    // level display and the reward corrections -- reads the result of this one
+    // function, so the offset moves all of them together.
     //
     // `canonicalLevel` is the creature's own unscaled level, and it is only
     // consulted under ZS_DIR_UP, where the answer is the higher of it and the
@@ -386,6 +415,15 @@ public:
     [[nodiscard]] bool IsElitePreserved() const { return _preserveEliteOffset; }
     [[nodiscard]] uint8 GetEliteOffsetMax() const { return _eliteOffsetMax; }
 
+    // ZoneScaling.TargetOffset: how many levels *below* the player a scaled
+    // creature is brought to. 0 presents everything at the player's own level;
+    // 3 or 4 keeps a scaled zone green rather than yellow, so it still pays XP
+    // but is a poorer place to grind than content at your level. Applied to the
+    // player's level before the band clamp, so the band floor still wins.
+    [[nodiscard]] uint8 GetTargetOffset() const { return _targetOffset; }
+    [[nodiscard]] uint8 TargetLevelFor(uint8 playerLevel) const
+    { return playerLevel > _targetOffset ? uint8(playerLevel - _targetOffset) : uint8(1); }
+
     // How far above the band an elite or rare should present, so that a
     // creature which cons dangerous before scaling still cons dangerous after.
     // 0 for normal ranks, for world bosses (never scaled anyway), and whenever
@@ -416,10 +454,32 @@ public:
     [[nodiscard]] bool IsChronoTablePresent() const { return _chronoTablePresent; }
     [[nodiscard]] bool GetChronoDefault() const { return _chronoDefault; }
 
+    // ZoneScaling.Chrono.BotDefault: -1 follows Chrono.Default, 0/1 give
+    // playerbots their own default. A bot never runs `.chrono`, so for bots the
+    // default *is* the choice. Reported by `.zs status`.
+    [[nodiscard]] int8 GetChronoBotDefault() const { return _chronoBotDefault; }
+
+    // A session with no socket has no real remote address: upstream leaves it
+    // empty, the mod-playerbots fork stamps it "bot". Checked this way rather
+    // than through the fork-only `WorldSession::IsBot()`, so the module still
+    // builds on a stock core, where the answer is simply always false.
+    [[nodiscard]] static bool IsBotPlayer(Player const* player);
+
+    // What a character with no stored choice does: Chrono.BotDefault for a
+    // bot when it is set, Chrono.Default otherwise.
+    [[nodiscard]] bool ChronoDefaultFor(Player const* player) const;
+
     // The one question the rest of the module asks about a player. True when
     // Chrono is inactive, so every caller can be written as though the opt-in
     // did not exist.
     [[nodiscard]] bool IsScalingActiveFor(Player const* player) const;
+
+    // Zone-aware form. Identical to the above except that a band flagged
+    // IgnoreChrono answers true regardless of the player's opt-out. Callers in
+    // the damage, kill-XP and quest-XP paths use this one; the Chrono XP BONUS
+    // deliberately does not, because that bonus is the reward for choosing to
+    // be scaled and must not be paid to someone who did not choose it.
+    [[nodiscard]] bool IsScalingActiveFor(Player const* player, uint32 zoneId) const;
 
     [[nodiscard]] static ZoneScalingPlayerState* GetPlayerState(Player const* player);
 
@@ -752,6 +812,7 @@ private:
     static bool CharacterTableExists(char const* table);
     bool LoadBands();
     bool LoadExclusions();
+    bool LoadForced();
     void LoadBaseStatsCoverage();
 
     bool _enable         = false;
@@ -774,6 +835,10 @@ private:
 
     ZoneScalingDefault   _defaultBehaviour = ZS_DEFAULT_OFF;
     ZoneScalingDirection _direction        = ZS_DIR_BOTH;
+
+    // Whether an instanced map needs an explicit mod_zone_scaling_zone row
+    // before it will scale, regardless of DefaultBehaviour.
+    bool _instancedRequireExplicit = true;
     ZoneScalingCanonical _canonical        = ZS_CANON_NATIVE;
     ZoneScalingAggro     _aggroMode        = ZS_AGGRO_STOCK;
 
@@ -785,6 +850,7 @@ private:
 
     bool  _preserveEliteOffset = true;
     uint8 _eliteOffsetMax      = 3;
+    uint8 _targetOffset        = 0;
 
     // Off by default, so installing this milestone changes nothing. When it is
     // switched on, _chronoDefault decides what every existing character does on
@@ -793,6 +859,7 @@ private:
     // warns about it every startup rather than only the first.
     bool _chronoEnable  = false;
     bool _chronoDefault = false;
+    int8 _chronoBotDefault = -1;
     bool _chronoTablePresent = false;
 
     // On by default, unlike Chrono: a realm that has switched scaling on has
@@ -861,6 +928,10 @@ private:
 
     std::unordered_map<uint32, ZoneScalingBand> _bands;
     std::unordered_set<uint32> _excluded;
+
+    // World bosses opted back into scaling. Read only by GetExclusion, and
+    // only for the ZS_EXCL_WORLDBOSS rule -- see mod_zone_scaling_force.
+    std::unordered_set<uint32> _forced;
 
     // (unitClass << 8 | expansion) -> highest level with usable data, for the
     // startup diagnostic and the band-ceiling warning only. HasBaseStats does

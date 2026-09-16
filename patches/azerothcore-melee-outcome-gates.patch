@@ -1,0 +1,30 @@
+diff --git a/src/server/game/Entities/Unit/Unit.cpp b/src/server/game/Entities/Unit/Unit.cpp
+index 320949f..bfdc5b0 100644
+--- a/src/server/game/Entities/Unit/Unit.cpp
++++ b/src/server/game/Entities/Unit/Unit.cpp
+@@ -3109,10 +3109,13 @@ MeleeHitOutcome Unit::RollMeleeOutcomeAgainst(Unit const* victim, WeaponAttackTy
+     }
+ 
+     // Max 40% chance to score a glancing blow against mobs that are higher level (can do only players and pets and not with ranged weapon)
++    // The level test is expressed through the max-skill-for-level values (getLevelForTarget * 5) so that a script
++    // which corrected them in OnBeforeRollMeleeOutcomeAgainst also decides whether this outcome can happen at all.
++    // Without a script the values are identical to the raw level comparison.
+     if (attType != RANGED_ATTACK &&
+             (IsPlayer() || IsPet()) &&
+             !victim->IsPlayer() && !victim->IsPet() &&
+-            GetLevel() < victim->getLevelForTarget(this))
++            attackerMaxSkillValueForLevel < victimMaxSkillValueForLevel)
+     {
+         // cap possible value (with bonuses > max skill)
+         int32 skill = attackerWeaponSkill;
+@@ -3128,8 +3131,8 @@ MeleeHitOutcome Unit::RollMeleeOutcomeAgainst(Unit const* victim, WeaponAttackTy
+         }
+     }
+ 
+-    // mobs can score crushing blows if they're 4 or more levels above victim
+-    if (getLevelForTarget(victim) >= victim->getLevelForTarget(this) + 4 &&
++    // mobs can score crushing blows if they're 4 or more levels above victim (four levels is 20 skill points, see above)
++    if (attackerMaxSkillValueForLevel >= victimMaxSkillValueForLevel + 20 &&
+             // can be from by creature (if can) or from controlled player that considered as creature
+             !IsControlledByPlayer() &&
+             !(IsCreature() && ToCreature()->HasFlagsExtra(CREATURE_FLAG_EXTRA_NO_CRUSHING_BLOWS)))

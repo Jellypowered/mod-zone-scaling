@@ -150,6 +150,11 @@ namespace
         if (!sZoneScalingMgr->IsScalingActiveFor(player))
             return;
 
+        // The bonus is the reward for *choosing* the harder realm. A bot scaled
+        // through Chrono.BotDefault did not choose anything.
+        if (ZoneScalingMgr::IsBotPlayer(player))
+            return;
+
         uint64 const bumped =
             uint64(amount) * (100 + sZoneScalingMgr->GetChronoXpBonusPct()) / 100;
 
@@ -241,7 +246,7 @@ Optional<uint8> ZoneScalingRewardLevelFor(Creature* creature, Player const* play
     if (!state || !state->Scalable || !state->StatsValid)
         return std::nullopt;
 
-    if (!sZoneScalingMgr->IsScalingActiveFor(player))
+    if (!sZoneScalingMgr->IsScalingActiveFor(player, state->ZoneId))
         return std::nullopt;
 
     canonical = state->CanonicalLevel;
@@ -311,7 +316,7 @@ bool ZoneScalingDescribeQuestXp(Quest const* quest, Player const* player, uint8 
 
     // A null player is the command asking about a level rather than a person;
     // there is no Chrono flag to consult and none is needed.
-    if (player && !sZoneScalingMgr->IsScalingActiveFor(player))
+    if (player && !sZoneScalingMgr->IsScalingActiveFor(player, uint32(out.ZoneOrSort)))
     {
         out.Declined = "player has opted out of Chrono Mode";
         return false;

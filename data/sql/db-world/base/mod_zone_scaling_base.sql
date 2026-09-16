@@ -31,6 +31,28 @@ CREATE TABLE IF NOT EXISTS `mod_zone_scaling_zone` (
 --     VALUES (40, 10, 60, 1, 'Westfall');
 
 
+--
+-- The inverse of mod_zone_scaling_exclude: entries scaled even though a rule
+-- would otherwise refuse them. Only the world-boss rule can be overridden this
+-- way; critters, totems, triggers and unattackable NPCs stay excluded, because
+-- scaling those achieves nothing and the rules exist to stop an administrator
+-- having to know that.
+--
+-- The case this was added for: content built for a level-85 realm where every
+-- end-of-instance boss is rank 3. On an 80-cap realm those bosses are
+-- unhittable, and the rest of their dungeon scales fine -- so the run ends at a
+-- wall. Listing them here scales them with everything else.
+--
+-- Prefer this to editing rank in creature_template. Rank also drives the health
+-- multiplier and the skull portrait, and rewriting imported content means
+-- re-doing it after every upstream pull.
+--
+CREATE TABLE IF NOT EXISTS `mod_zone_scaling_force` (
+  `entry`  INT UNSIGNED NOT NULL COMMENT 'creature_template.entry, scaled despite the world-boss rule',
+  `reason` VARCHAR(255) NOT NULL DEFAULT '',
+  PRIMARY KEY (`entry`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='mod-zone-scaling: world bosses opted back in';
+
 CREATE TABLE IF NOT EXISTS `mod_zone_scaling_exclude` (
   `entry`  INT UNSIGNED NOT NULL COMMENT 'creature_template.entry, never scaled',
   `reason` VARCHAR(255) NOT NULL DEFAULT '',

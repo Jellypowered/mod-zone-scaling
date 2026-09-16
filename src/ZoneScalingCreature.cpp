@@ -46,7 +46,7 @@ void ZoneScalingMgr::BuildState(Creature* creature, ZoneScalingCreatureState& st
     // instanced-content gate depend on which path reached this function.
     state.Scalable = state.Exclusion == ZS_NOT_EXCLUDED
         && IsMapAllowed(creature->FindMap())
-        && GetBand(state.ZoneId) != nullptr;
+        && GetBand(state.ZoneId, creature->FindMap()) != nullptr;
 
     state.StatsValid = ComputeStats(cinfo, state.CanonicalLevel, state.CanonicalStats);
 }
@@ -69,7 +69,7 @@ bool ZoneScalingMgr::IsCandidate(Creature* creature) const
     if (GetExclusion(creature->GetCreatureTemplate()) != ZS_NOT_EXCLUDED)
         return false;
 
-    return GetBand(creature->GetZoneId()) != nullptr;
+    return GetBand(creature->GetZoneId(), creature->FindMap()) != nullptr;
 }
 
 void ZoneScalingMgr::OnAddWorld(Creature* creature)
@@ -210,7 +210,7 @@ void ZoneScalingMgr::OnBeforeSelectLevel(CreatureTemplate const* cinfo, Creature
     if (!IsMapAllowed(creature->FindMap()))
         return;
 
-    ZoneScalingBand const* band = GetBand(creature->GetZoneId());
+    ZoneScalingBand const* band = GetBand(creature->GetZoneId(), creature->FindMap());
     if (!band)
         return;
 

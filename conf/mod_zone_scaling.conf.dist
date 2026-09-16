@@ -82,6 +82,35 @@ ZoneScaling.DefaultBehaviour = "off"
 ZoneScaling.Direction = "both"
 
 #
+#    ZoneScaling.TargetOffset
+#        Description: How many levels BELOW the player a scaled creature is
+#                     brought to. 0 presents everything at exactly your level.
+#
+#                     3 or 4 is the Ascension feel: an outlevelled zone comes up
+#                     to a few levels under you, so it still cons green, still
+#                     pays XP and still has usable quests, but it is a poorer
+#                     place to grind than content at your own level. It also
+#                     leaves room for the elite offset to mean something -- an
+#                     elite in such a zone presents at your level or just above
+#                     while the trash beside it sits below you.
+#
+#                     Applied before the band clamp, so a band floor still
+#                     wins, and before the direction rule, so under 'up' a
+#                     creature already between the target and your level is
+#                     left where it is. Every consumer follows the same number:
+#                     damage, hit tables, the nameplate and the XP and loot
+#                     corrections all move together.
+#
+#                     Capped at 10. Beyond the grey threshold the creature pays
+#                     no XP at all, which is the opposite of what the option is
+#                     for; narrow the band instead.
+#
+#        Default:     0
+#
+
+ZoneScaling.TargetOffset = 0
+
+#
 #    ZoneScaling.Default.MinLevel
 #    ZoneScaling.Default.MaxLevel
 #        Description: The band applied to zones with no row, when
@@ -321,6 +350,23 @@ ZoneScaling.AggroRange = "stock"
 #        Default:     1 / 0 / 0 / 0 / 0
 #
 
+#
+#    ZoneScaling.Instanced.RequireExplicitBand
+#        Whether an instanced map (dungeon, raid, battleground, arena) needs its
+#        own row in mod_zone_scaling_zone before it will scale, even when
+#        DefaultBehaviour is "clamp".
+#
+#        Leave this on. With it off and DefaultBehaviour = clamp, enabling any
+#        of the Maps.* settings below scales not just the maps you meant but
+#        every instance of that kind on the realm -- Naxxramas flattened to a
+#        levelling band because you wanted one custom raid map scaled. Enabling
+#        a map kind says "these MAY scale"; a band row says which ones do.
+#
+#        Default: 1 (instanced maps need an explicit band)
+#
+
+ZoneScaling.Instanced.RequireExplicitBand = 1
+
 ZoneScaling.Maps.World = 1
 ZoneScaling.Maps.Dungeon = 0
 ZoneScaling.Maps.Raid = 0
@@ -432,6 +478,29 @@ ZoneScaling.Chrono.Enable = 0
 #
 
 ZoneScaling.Chrono.Default = 0
+
+#
+#    ZoneScaling.Chrono.BotDefault
+#        Description: What a playerbot with no stored choice does. Bots never
+#                     run '.chrono', so for them the default is the choice.
+#
+#                     -1 -- same as Chrono.Default.
+#                      0 -- bots are never scaled.
+#                      1 -- bots are always scaled. With Chrono.Default = 0 this
+#                           gives you an opt-in realm for people and a scaled
+#                           world for the bots that populate it, so a bot
+#                           levelling through Westfall at 40 meets Westfall at
+#                           its own level rather than one-shotting it.
+#
+#                     A bot is recognised by its session having no remote
+#                     address, which is how mod-playerbots creates them; on a
+#                     core without bots nothing matches and this option is
+#                     inert. Bots are never paid the Chrono XP bonus.
+#
+#        Default:     -1
+#
+
+ZoneScaling.Chrono.BotDefault = -1
 
 #
 #    ZoneScaling.Chrono.XpBonus

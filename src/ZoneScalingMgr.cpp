@@ -47,6 +47,8 @@ void ZoneScalingMgr::LoadConfig()
 {
     _enable = sConfigMgr->GetOption<bool>("ZoneScaling.Enable", false);
     _debug  = sConfigMgr->GetOption<bool>("ZoneScaling.Debug", false);
+    _instancedRequireExplicit =
+        sConfigMgr->GetOption<bool>("ZoneScaling.Instanced.RequireExplicitBand", true);
 
     _scaleDamage    = sConfigMgr->GetOption<bool>("ZoneScaling.ScaleDamage", true);
     _scaleHitChance = sConfigMgr->GetOption<bool>("ZoneScaling.ScaleHitChance", true);
@@ -130,6 +132,12 @@ void ZoneScalingMgr::LoadConfig()
     _chronoEnable  = sConfigMgr->GetOption<bool>("ZoneScaling.Chrono.Enable", false);
     _chronoDefault = sConfigMgr->GetOption<bool>("ZoneScaling.Chrono.Default", false);
 
+    // -1 inherits Chrono.Default; anything else is clamped to 0/1.
+    {
+        int32 const botDefault = sConfigMgr->GetOption<int32>("ZoneScaling.Chrono.BotDefault", -1);
+        _chronoBotDefault = botDefault < 0 ? int8(-1) : int8(botDefault != 0);
+    }
+
     _xpEnable    = sConfigMgr->GetOption<bool>("ZoneScaling.Xp.Enable", true);
     _xpGreyKills = sConfigMgr->GetOption<bool>("ZoneScaling.Xp.GreyKills", true);
     _xpQuests    = sConfigMgr->GetOption<bool>("ZoneScaling.Xp.Quests", true);
@@ -163,6 +171,12 @@ void ZoneScalingMgr::LoadConfig()
     _eliteOffsetMax =
         uint8(std::min<uint32>(sConfigMgr->GetOption<uint32>("ZoneScaling.PreserveEliteOffset.Max", 3),
                                255));
+
+    // Capped at 10: past the grey threshold (5 + level/10 at the top of the
+    // curve) a scaled creature would pay no XP, which contradicts the reason
+    // the option exists. Anyone wanting more than that wants a narrower band.
+    _targetOffset =
+        uint8(std::min<uint32>(sConfigMgr->GetOption<uint32>("ZoneScaling.TargetOffset", 0), 10));
 
     // Loud, because the two together are the one combination that can flatten
     // hand-tuned content, and an operator who set them months ago should be
@@ -266,7 +280,8 @@ bool ZoneScalingMgr::LoadBands()
     }
 
     QueryResult result = WorldDatabase.Query(
-        "SELECT zoneId, minLevel, maxLevel, enabled FROM mod_zone_scaling_zone");
+        "SELECT zoneId, minLevel, maxLevel, enabled, direction, ignore_chrono "
+        "FROM mod_zone_scaling_zone");
 
     // Now unambiguous: the table is there, so no rows means no rows. That is
     // the shipped state and is not an error.
@@ -288,6 +303,18 @@ bool ZoneScalingMgr::LoadBands()
         band.MinLevel = fields[1].Get<uint8>();
         band.MaxLevel = fields[2].Get<uint8>();
         band.Enabled  = fields[3].Get<bool>();
+
+        // 0 = inherit the global setting, 1 = both, 2 = up. Deliberately not
+        // the ZS_DIR_* values: 0 is the column default, and "inherit" is the
+        // answer that must fall out of a row nobody edited.
+        switch (fields[4].Get<uint8>())
+        {
+            case 1:  band.Direction = ZS_DIR_BOTH; break;
+            case 2:  band.Direction = ZS_DIR_UP;   break;
+            default: band.Direction = ZS_DIR_INHERIT; break;
+        }
+
+        band.IgnoreChrono = fields[5].Get<bool>();
 
         if (band.MinLevel == 0 || band.MinLevel > band.MaxLevel)
         {
@@ -346,6 +373,40 @@ bool ZoneScalingMgr::LoadExclusions()
 
     LOG_INFO("module.zonescaling", "mod-zone-scaling: loaded {} creature exclusion(s).",
         static_cast<uint32>(_excluded.size()));
+
+    return true;
+}
+
+bool ZoneScalingMgr::LoadForced()
+{
+    _forced.clear();
+
+    // Missing table is a warning, not an error, and deliberately quieter than
+    // the exclude one: an install predating this table has no forced entries to
+    // lose, whereas a missing exclude table silently re-enables creatures an
+    // administrator had turned off.
+    if (!TableExists("mod_zone_scaling_force"))
+    {
+        LOG_WARN("module.zonescaling",
+            "Table mod_zone_scaling_force is missing; world bosses cannot be "
+            "opted back into scaling. Run the module's base SQL to add it.");
+        return false;
+    }
+
+    QueryResult result = WorldDatabase.Query(
+        "SELECT entry FROM mod_zone_scaling_force");
+
+    if (!result)
+        return true;
+
+    do
+    {
+        _forced.insert(result->Fetch()[0].Get<uint32>());
+    } while (result->NextRow());
+
+    LOG_INFO("module.zonescaling",
+        "mod-zone-scaling: loaded {} forced world boss(es).",
+        static_cast<uint32>(_forced.size()));
 
     return true;
 }
@@ -485,6 +546,7 @@ void ZoneScalingMgr::LoadFromDB()
 {
     _bands.clear();
     _excluded.clear();
+    _forced.clear();
     _tablesPresent = false;
     _chronoTablePresent = false;
 
@@ -497,6 +559,7 @@ void ZoneScalingMgr::LoadFromDB()
     // bands failure as fatal to activation.
     bool const bandsOk = LoadBands();
     LoadExclusions();
+    LoadForced();
 
     _tablesPresent = bandsOk;
 
@@ -516,7 +579,7 @@ void ZoneScalingMgr::LoadFromDB()
             "affected.");
 }
 
-ZoneScalingBand const* ZoneScalingMgr::GetBand(uint32 zoneId) const
+ZoneScalingBand const* ZoneScalingMgr::GetBand(uint32 zoneId, Map const* map) const
 {
     if (!IsActive())
         return nullptr;
@@ -527,6 +590,16 @@ ZoneScalingBand const* ZoneScalingMgr::GetBand(uint32 zoneId) const
 
     // An explicit row always wins over the default, including a disabled one:
     // "enabled = 0" means "specifically not this zone", not "fall through".
+
+    // The default band is an open-world statement, and applying it to an
+    // instanced map is the failure the breadth rules exist to prevent: with
+    // DefaultBehaviour = clamp, enabling Maps.Raid would scale not just the
+    // maps an administrator meant but every raid on the realm, Naxxramas
+    // included. Enabling a map kind says "these maps MAY scale"; a row in
+    // mod_zone_scaling_zone says which ones do.
+    if (_instancedRequireExplicit && map && ResolveMapKind(map) != ZS_MAP_WORLD)
+        return nullptr;
+
     if (_defaultBehaviour == ZS_DEFAULT_CLAMP)
         return &_defaultBand;
 
@@ -540,7 +613,11 @@ Optional<uint8> ZoneScalingMgr::GetEffectiveLevel(uint32 zoneId, uint8 playerLev
     if (!band)
         return std::nullopt;
 
-    uint8 banded = band->Clamp(playerLevel);
+    // TargetOffset first, band second: a level-5 player with an offset of 4
+    // asks for level 1, and a 10-60 band still answers 10. The offset expresses
+    // "a little below me"; the band floor expresses "never below this", and
+    // the floor is the harder statement.
+    uint8 banded = band->Clamp(TargetLevelFor(playerLevel));
 
     // The elite offset lifts the presented level above the band, so that a rare
     // elite still cons dangerous after scaling has flattened everything around
@@ -578,7 +655,10 @@ Optional<uint8> ZoneScalingMgr::GetEffectiveLevel(uint32 zoneId, uint8 playerLev
     // Nothing above the band ceiling is raised, either way. A band maximum
     // still means "this zone never scales anything past here"; it just stops
     // being a level *reduction* for creatures that were already past it.
-    if (_direction == ZS_DIR_UP && canonicalLevel > banded)
+    ZoneScalingDirection const direction =
+        band->Direction == ZS_DIR_INHERIT ? _direction : band->Direction;
+
+    if (direction == ZS_DIR_UP && canonicalLevel > banded)
         return canonicalLevel;
 
     return banded;
@@ -592,7 +672,10 @@ ZoneScalingExclusion ZoneScalingMgr::GetExclusion(CreatureTemplate const* cinfo)
     if (_excluded.find(cinfo->Entry) != _excluded.end())
         return ZS_EXCL_TABLE;
 
-    if (cinfo->rank == CREATURE_ELITE_WORLDBOSS)
+    // Checked before the rank rule rather than after, so that an entry listed
+    // in both tables stays excluded -- mod_zone_scaling_exclude is the harder
+    // statement of the two and should win.
+    if (cinfo->rank == CREATURE_ELITE_WORLDBOSS && _forced.find(cinfo->Entry) == _forced.end())
         return ZS_EXCL_WORLDBOSS;
 
     if (cinfo->type == CREATURE_TYPE_CRITTER)
@@ -668,6 +751,7 @@ std::string ZoneScalingMgr::DescribeStatus() const
     out << "mod-zone-scaling: " << (_enable ? "enabled" : "DISABLED")
         << ", tables " << (_tablesPresent ? "loaded" : "NOT loaded")
         << ", " << _bands.size() << " band(s), " << _excluded.size() << " exclusion(s)"
+        << ", " << _forced.size() << " forced boss(es)"
         << ", default " << (_defaultBehaviour == ZS_DEFAULT_CLAMP ? "clamp" : "off");
 
     if (_defaultBehaviour == ZS_DEFAULT_CLAMP)
@@ -693,6 +777,8 @@ std::string ZoneScalingMgr::DescribeStatus() const
     out << ", elite offset "
         << (_preserveEliteOffset ? "+" + std::to_string(uint32(_eliteOffsetMax)) + " max" : "off");
 
+    out << ", target offset " << (_targetOffset ? "-" + std::to_string(uint32(_targetOffset)) : "0");
+
     // Spelled out rather than reported as a flag, because "chrono on" alone
     // does not say what it does to a player who has never toggled -- and that
     // is the entire population on the day it is switched on.
@@ -702,7 +788,11 @@ std::string ZoneScalingMgr::DescribeStatus() const
     else if (!_chronoTablePresent)
         out << "ON but TABLE MISSING (everyone scales)";
     else
+    {
         out << "on, default " << (_chronoDefault ? "opted in" : "opted OUT");
+        if (_chronoBotDefault >= 0)
+            out << ", bots default " << (_chronoBotDefault ? "opted in" : "opted OUT");
+    }
 
     out << ", direction "
         << (_direction == ZS_DIR_UP ? "up (level-up only)" : "both (full scaling)")
