@@ -21,6 +21,7 @@ void AddZoneScalingChronoScripts();
 void AddZoneScalingRewardScripts();
 void AddZoneScalingLootScripts();
 void AddZoneScalingGossipScripts();
+void AddZoneScalingViewScripts();
 
 void Addmod_zone_scalingScripts()
 {
@@ -33,4 +34,5 @@ void Addmod_zone_scalingScripts()
     AddZoneScalingRewardScripts();
     AddZoneScalingLootScripts();
     AddZoneScalingGossipScripts();
+    AddZoneScalingViewScripts();
 }

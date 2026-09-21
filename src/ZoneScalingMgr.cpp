@@ -53,6 +53,8 @@ void ZoneScalingMgr::LoadConfig()
     _scaleDamage    = sConfigMgr->GetOption<bool>("ZoneScaling.ScaleDamage", true);
     _scaleHitChance = sConfigMgr->GetOption<bool>("ZoneScaling.ScaleHitChance", true);
     _scaleLevelDisplay = sConfigMgr->GetOption<bool>("ZoneScaling.ScaleLevelDisplay", true);
+    _scalePoolDisplay  = sConfigMgr->GetOption<bool>("ZoneScaling.ScalePoolDisplay", true);
+    _coreView          = sConfigMgr->GetOption<bool>("ZoneScaling.CoreView", true);
 
     std::string const behaviour =
         sConfigMgr->GetOption<std::string>("ZoneScaling.DefaultBehaviour", "off");
@@ -800,6 +802,8 @@ std::string ZoneScalingMgr::DescribeStatus() const
         << ", damage scaling " << (_scaleDamage ? "ON" : "off")
         << ", hit-chance scaling " << (_scaleHitChance ? "ON" : "off")
         << ", level display " << (_scaleLevelDisplay ? "ON" : "off")
+        << ", pool display " << (_scalePoolDisplay ? "ON" : "off")
+        << ", core view " << (!_coreViewInstalled ? "ABSENT (core unpatched)" : _coreView ? "ON" : "off")
         << ", aggro " << (_aggroMode == ZS_AGGRO_NORMALIZE ? "normalize" : "stock")
         << ", " << GetTaggedCount() << " creature(s) tagged";
 

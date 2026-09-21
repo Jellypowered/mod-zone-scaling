@@ -177,6 +177,71 @@ Optional<uint8> ZoneScalingMgr::GetEffectiveLevelFor(Creature* creature, Player 
     return effective;
 }
 
+Optional<uint8> ZoneScalingMgr::GetViewLevelFor(Creature const* creature, Player const* player) const
+{
+    if (!IsActive() || !creature || !player)
+        return std::nullopt;
+
+    // An owned creature is the player's own and resolves to them, never to a
+    // view -- the same exclusion ResolveScaledCreature makes for the hooks.
+    if (creature->GetCharmerOrOwnerPlayerOrPlayerItself())
+        return std::nullopt;
+
+    ZoneScalingCreatureState const* state = GetState(const_cast<Creature*>(creature));
+    if (!state || !state->Scalable || !state->StatsValid)
+        return std::nullopt;
+
+    Optional<uint8> const effective =
+        GetEffectiveLevel(state->ZoneId, player->GetLevel(), state->CanonicalLevel, state->Rank);
+    if (!effective || *effective == state->CanonicalLevel)
+        return std::nullopt;
+
+    if (!IsScalingActiveFor(player, state->ZoneId))
+        return std::nullopt;
+
+    return effective;
+}
+
+uint32 ZoneScalingMgr::GetViewArmorFor(Creature const* creature, Player const* player) const
+{
+    Optional<uint8> const effective = GetViewLevelFor(creature, player);
+    if (!effective)
+        return 0;
+
+    ZoneScalingStats stats;
+    if (!ComputeStats(creature->GetCreatureTemplate(), *effective, stats))
+        return 0;
+
+    return uint32(stats.Armor);
+}
+
+bool ZoneScalingMgr::GetViewPool(Creature const* creature, uint8 effective, ViewPool& out) const
+{
+    if (!creature)
+        return false;
+
+    ZoneScalingCreatureState const* state = GetState(const_cast<Creature*>(creature));
+    if (!state || !state->StatsValid || !state->CanonicalStats.Health)
+        return false;
+
+    ZoneScalingStats stats;
+    if (!ComputeStats(creature->GetCreatureTemplate(), effective, stats))
+        return false;
+
+    uint32 const realMax = std::max<uint32>(creature->GetMaxHealth(), 1);
+    out.MaxHealth = std::max<uint32>(1, uint32(uint64(realMax) * stats.Health / state->CanonicalStats.Health));
+    out.Health    = uint32(uint64(creature->GetHealth()) * out.MaxHealth / realMax);
+
+    out.MaxMana = out.Mana = 0;
+    uint32 const realMaxMana = creature->GetMaxPower(POWER_MANA);
+    if (realMaxMana && state->CanonicalStats.Mana && stats.Mana)
+    {
+        out.MaxMana = std::max<uint32>(1, uint32(uint64(realMaxMana) * stats.Mana / state->CanonicalStats.Mana));
+        out.Mana    = uint32(uint64(creature->GetPower(POWER_MANA)) * out.MaxMana / realMaxMana);
+    }
+    return true;
+}
+
 ZoneScalingRatios ZoneScalingMgr::GetRatios(Creature* creature, Player const* player) const
 {
     ZoneScalingRatios const identity;

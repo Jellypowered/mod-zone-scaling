@@ -257,6 +257,50 @@ ZoneScaling.ScaleHitChance = 1
 ZoneScaling.ScaleLevelDisplay = 1
 
 #
+#    ZoneScaling.ScalePoolDisplay
+#        Description: Show each player the health and mana bars of the
+#                     creature's effective-level version, not its real pool.
+#
+#                     The creature keeps one real pool; each observer's copy
+#                     of the update packet carries that pool scaled by the
+#                     health curve between canonical and effective level,
+#                     with the current value at the same share. A blow that
+#                     removes a tenth of the real pool removes a tenth of the
+#                     bar every observer sees. Requires ScaleLevelDisplay.
+#
+#                     Adopted from CoA PR #4406 (Z-14).
+#
+#        Default:     1
+#
+
+ZoneScaling.ScalePoolDisplay = 1
+
+#
+#    ZoneScaling.CoreView
+#        Description: Answer the core's per-target level and armor queries
+#                     with the effective level (Z-14).
+#
+#                     Needs the core patch (patches/zs_per_viewer_level_apply.py
+#                     or zs_per_viewer_level.patch). With it, everything the
+#                     core derives from "how high is this unit relative to me"
+#                     follows the effective level: spell hit and resistance,
+#                     weapon and defence skill, the glancing and crushing
+#                     gates, stealth detection, aggro radius, kill XP gray
+#                     checks, reputation and the "grants XP or honor" gate;
+#                     and a blow is mitigated against the effective level's
+#                     armor. Without the patch this setting does nothing and
+#                     .zs status says "core view ABSENT".
+#
+#                     Set AggroRange = "stock" alongside it: the radius now
+#                     follows each viewer, so the band-midpoint normalisation
+#                     would offset a term that is already correct.
+#
+#        Default:     1
+#
+
+ZoneScaling.CoreView = 1
+
+#
 #    ZoneScaling.AggroRange
 #        Description: How proximity aggro range is handled in a scaled zone.
 #

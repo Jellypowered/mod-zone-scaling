@@ -694,6 +694,40 @@ public:
     [[nodiscard]] bool IsHitChanceScalingEnabled() const { return _scaleHitChance; }
     [[nodiscard]] bool IsLevelDisplayEnabled() const { return _scaleLevelDisplay; }
 
+    // --- the core view (Z-14) --------------------------------------------
+    //
+    // With the Z-14 core patch applied, `Creature::getLevelForTarget` and
+    // armor mitigation ask the module for a viewer's version of a creature
+    // (see ZoneScalingView.cpp). `CoreView` is the config switch; `Installed`
+    // records whether this build's core had the header at all.
+    [[nodiscard]] bool IsCoreViewEnabled() const { return _coreView; }
+    [[nodiscard]] bool IsCoreViewInstalled() const { return _coreViewInstalled; }
+    void SetCoreViewInstalled(bool installed) { _coreViewInstalled = installed; }
+    [[nodiscard]] bool IsPoolDisplayEnabled() const { return _scalePoolDisplay; }
+
+    // GetEffectiveLevelFor without the diagnostics. The core asks this from
+    // inside getLevelForTarget -- per aggro check, per roll, per XP award --
+    // and routing that through the counting form would make "scaled fights"
+    // and "Chrono-suppressed fights" count queries instead of fights.
+    [[nodiscard]] Optional<uint8> GetViewLevelFor(Creature const* creature,
+                                                  Player const* player) const;
+
+    // The armor of the viewer's version, or 0 when there is no view.
+    [[nodiscard]] uint32 GetViewArmorFor(Creature const* creature, Player const* player) const;
+
+    // The health and mana bars of the viewer's version: the real pool scaled
+    // by the health (and mana) curve between canonical and effective level,
+    // with the current values carried as the same share. False when the
+    // pairing is not scaled or the stats are unusable.
+    struct ViewPool
+    {
+        uint32 MaxHealth = 0;
+        uint32 Health    = 0;
+        uint32 MaxMana   = 0;   // 0 = leave the mana fields alone
+        uint32 Mana      = 0;
+    };
+    [[nodiscard]] bool GetViewPool(Creature const* creature, uint8 effective, ViewPool& out) const;
+
     // The level this creature presents at to this player, or std::nullopt when
     // the pairing is not scaled at all. Shared by the damage ratios and the
     // melee hit table, which must agree or the two corrections fight.
@@ -820,6 +854,9 @@ private:
     bool _scaleDamage       = true;
     bool _scaleHitChance    = true;
     bool _scaleLevelDisplay = true;
+    bool _scalePoolDisplay  = true;
+    bool _coreView          = true;
+    bool _coreViewInstalled = false;
 
     // Ratios are clamped into this range before use. Nothing legitimate gets
     // near either end -- the widest band this core can express, level 1 against

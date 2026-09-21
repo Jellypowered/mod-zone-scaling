@@ -636,8 +636,15 @@ module work removes them:
   gates happen to agree with stock, so the loss is confined to elites. The
   probabilities themselves are already correct either way. See "Glancing and
   crushing blows" above.
-- **Only melee hit chance is corrected.** Spell hit and resistance still use
-  canonical levels.
+- **Only melee hit chance is corrected — unless the Z-14 core patch is
+  applied.** With `patches/zs_per_viewer_level_apply.py` (or the `.patch`)
+  on the core and `CoreView = 1`, `Creature::getLevelForTarget` and armor
+  mitigation ask this module for the viewer's version, and spell hit and
+  resistance, weapon and defence skill, the glancing and crushing gates,
+  stealth detection, aggro radius, kill XP, reputation and the "grants XP or
+  honor" gate all follow the effective level from that one definition. The
+  melee-outcome-gates patch above is then redundant (harmless). Without the
+  patch, spell hit and resistance still use canonical levels.
 - **The grey-kill top-up reimplements core logic.** It has to: when the stock
   award is zero the core never calls the hook a module would use to change it,
   and there is no hook anywhere in `Unit::Kill` before the reward runs, so a
@@ -664,9 +671,10 @@ module work removes them:
   stock world DB, where the ceiling is 73 — elites present at exactly the same
   level as the trash beside them. Narrower bands, or an extended
   `creature_classlevelstats`, are the only fixes.
-- **Only the level field is shown per observer.** Health, damage and everything
-  else in the unit's fields remain canonical for every viewer; the scaling is a
-  relabelling plus a damage multiplier, not a per-player creature.
+- **Only the level, health and mana fields are shown per observer.** Damage
+  and everything else in the unit's fields remain canonical for every viewer;
+  the scaling is a relabelling plus a damage multiplier, not a per-player
+  creature. (`ScalePoolDisplay` adds the bars, Z-14.)
 - **Aggro radius cannot be made per-player.** The core computes it as
   `detectionRange - (playerLevel - creatureLevel)` and exposes no hook on
   `Creature::GetAggroRange`, `GetAttackDistance` or `CanStartAttack`, while
@@ -676,9 +684,21 @@ module work removes them:
   reaching 5 yards while the level-25 ogre beside it reaches 22. It cannot remove
   the *player's* level; the residual is `|effective level - band midpoint|`
   yards, the same for every creature in the zone and zero at the midpoint. Run
-  `.zs aggro` to see the size of the gap on your own bands. Fixing this properly
-  needs a core hook, which would benefit every scaling module and is worth
-  proposing upstream.
+  `.zs aggro` to see the size of the gap on your own bands. **The Z-14 core
+  patch is that hook**: with it the radius follows each viewer exactly, and
+  `AggroRange` should be left at `stock`.
+
+## Credits
+
+The per-viewer level and armor resolvers in the core (`CreatureView.h`,
+`patches/zs_per_viewer_level_apply.py`, `src/ZoneScalingView.cpp`) and the
+per-observer health and mana bars (`ScalePoolDisplay`) are adopted from
+[jealous-sound/azerothcore-wotlk-coa#4406](https://github.com/jealous-sound/azerothcore-wotlk-coa/pull/4406),
+"feat(scaling): Level scaling and the Destiny Weavers" by **bozo-1**
+(commit `1c1235abc`, 2026-09-20). That PR's `LocalLevelScaling.h` resolver
+slots and its `destiny_weaver_scaling.cpp` are the design; this module
+reimplements them over its own effective-level and stat tables. Its realm-wide
+lift, quest keep-shares, group-leader override and Weaver NPCs are not carried.
 
 ## License
 

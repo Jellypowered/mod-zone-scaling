@@ -101,10 +101,17 @@ public:
     [[nodiscard]] bool ShouldTrackValuesUpdatePosByIndex(Unit const* unit, uint8 /*updateType*/,
                                                          uint16 index) override
     {
-        if (index != UNIT_FIELD_LEVEL)
+        // Z-14: the health and mana bars are patched per observer as well, so
+        // the pool a player watches is their version's (from CoA PR #4406).
+        bool const pool = index == UNIT_FIELD_MAXHEALTH || index == UNIT_FIELD_HEALTH
+                       || index == UNIT_FIELD_MAXPOWER1 || index == UNIT_FIELD_POWER1;
+        if (index != UNIT_FIELD_LEVEL && !pool)
             return false;
 
         if (!sZoneScalingMgr->IsLevelDisplayEnabled())
+            return false;
+
+        if (pool && !sZoneScalingMgr->IsPoolDisplayEnabled())
             return false;
 
         if (!ResolveScaledCreature(unit))
@@ -124,8 +131,12 @@ public:
         // the common case: partial updates only carry changed fields. Checking
         // the map first also keeps this hook cheap for every other unit in the
         // world, since it runs for all of them.
-        auto const itr = posPointers.other.find(UNIT_FIELD_LEVEL);
-        if (itr == posPointers.other.end())
+        auto const& other = posPointers.other;
+        auto const itr = other.find(UNIT_FIELD_LEVEL);
+        bool const wantPool = sZoneScalingMgr->IsPoolDisplayEnabled()
+            && (other.count(UNIT_FIELD_MAXHEALTH) || other.count(UNIT_FIELD_HEALTH)
+                || other.count(UNIT_FIELD_MAXPOWER1) || other.count(UNIT_FIELD_POWER1));
+        if (itr == other.end() && !wantPool)
             return;
 
         Creature const* creature = ResolveScaledCreature(unit);
@@ -145,8 +156,32 @@ public:
 
         // The position has already had the cache and packet offsets applied by
         // the caller, so it indexes the real buffer.
-        valuesUpdateBuf.put<uint32>(itr->second, uint32(*effective));
-        sZoneScalingMgr->CountLevelPatched();
+        if (itr != other.end())
+        {
+            valuesUpdateBuf.put<uint32>(itr->second, uint32(*effective));
+            sZoneScalingMgr->CountLevelPatched();
+        }
+
+        if (!wantPool)
+            return;
+
+        ZoneScalingMgr::ViewPool pool;
+        if (!sZoneScalingMgr->GetViewPool(creature, *effective, pool))
+            return;
+
+        auto put = [&](uint16 index, uint32 value)
+        {
+            auto const p = other.find(index);
+            if (p != other.end())
+                valuesUpdateBuf.put<uint32>(p->second, value);
+        };
+        put(UNIT_FIELD_MAXHEALTH, pool.MaxHealth);
+        put(UNIT_FIELD_HEALTH, pool.Health);
+        if (pool.MaxMana)
+        {
+            put(UNIT_FIELD_MAXPOWER1, pool.MaxMana);
+            put(UNIT_FIELD_POWER1, pool.Mana);
+        }
     }
 };
 
@@ -201,6 +236,11 @@ void ZoneScalingRefreshNearbyLevels(Player* player, char const* why)
         // Unit::InvalidateValuesUpdateCache is private, so this ordering is
         // relied on rather than enforced.
         creature->ForceValuesUpdateAtIndex(UNIT_FIELD_LEVEL);
+        if (sZoneScalingMgr->IsPoolDisplayEnabled())
+        {
+            creature->ForceValuesUpdateAtIndex(UNIT_FIELD_MAXHEALTH);
+            creature->ForceValuesUpdateAtIndex(UNIT_FIELD_HEALTH);
+        }
         ++refreshed;
     }
 
