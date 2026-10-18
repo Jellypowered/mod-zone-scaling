@@ -290,7 +290,10 @@ bool ZoneScalingMgr::LoadBands()
     if (!result)
     {
         LOG_INFO("module.zonescaling",
-            "mod_zone_scaling_zone is empty; no zone is configured for scaling.");
+            "mod_zone_scaling_zone is empty; {}",
+            _defaultBehaviour == ZS_DEFAULT_CLAMP
+                ? "unlisted open-world zones use the default clamp band."
+                : "no zone is configured for scaling (default off).");
         return true;
     }
 
@@ -803,7 +806,8 @@ std::string ZoneScalingMgr::DescribeStatus() const
         << ", hit-chance scaling " << (_scaleHitChance ? "ON" : "off")
         << ", level display " << (_scaleLevelDisplay ? "ON" : "off")
         << ", pool display " << (_scalePoolDisplay ? "ON" : "off")
-        << ", core view " << (!_coreViewInstalled ? "ABSENT (core unpatched)" : _coreView ? "ON" : "off")
+        << ", core view " << (!_coreViewChecked ? "pending startup check"
+                             : !_coreViewInstalled ? "ABSENT (core unpatched)" : _coreView ? "ON" : "off")
         << ", aggro " << (_aggroMode == ZS_AGGRO_NORMALIZE ? "normalize" : "stock")
         << ", " << GetTaggedCount() << " creature(s) tagged";
 
@@ -845,18 +849,28 @@ std::string ZoneScalingMgr::DescribeStatus() const
         out << ", " << GetChronoSuppressedCount() << " scaled fight(s) suppressed by Chrono, "
             << GetChronoToggledCount() << " toggle(s)";
 
-    // Reported unconditionally when XP scaling is on, and the two kill numbers
-    // are reported separately on purpose: they come from different mechanisms
-    // with different risk, and "corrected" staying at 0 while "topped up"
-    // climbs is the signature of a band that only ever scales upward past the
-    // gray line. Reading one merged total would hide that.
+    // With Z-14 the core prices solo kills and group reference XP. The module
+    // corrects each group recipient's share against that reference when XP
+    // correction is enabled; the legacy gray top-up is never used.
+    if (_coreViewInstalled && _coreView)
+    {
+        out << ", kill XP priced by core (Z-14)";
+        if (_xpEnable)
+            out << ", " << GetXpKillAdjustedCount() << " group XP award(s) corrected";
+    }
+
+    // Without Z-14 these counters come from separate mechanisms, so report
+    // both rather than merging the safe ratio path with the riskier top-up.
     if (_xpEnable)
     {
-        out << ", " << GetXpKillAdjustedCount() << " kill XP award(s) corrected";
+        if (!_coreViewInstalled || !_coreView)
+        {
+            out << ", " << GetXpKillAdjustedCount() << " kill XP award(s) corrected";
 
-        if (_xpGreyKills)
-            out << ", " << GetXpGreyPaidCount() << " grey kill(s) topped up ("
-                << GetXpGreyAmount() << " XP)";
+            if (_xpGreyKills)
+                out << ", " << GetXpGreyPaidCount() << " grey kill(s) topped up ("
+                    << GetXpGreyAmount() << " XP)";
+        }
 
         if (_xpQuests)
             out << ", " << GetXpQuestAdjustedCount() << " quest XP award(s) corrected";

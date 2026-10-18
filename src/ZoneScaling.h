@@ -307,8 +307,8 @@ bool ZoneScalingDescribeQuestXp(Quest const* quest, Player const* player, uint8 
 Creature* ZoneScalingScaledCreature(Unit* unit);
 
 // The level this creature is being fought at by this player, or nullopt when
-// nothing about the reward should move. Fills `canonical` with the creature's
-// own level either way.
+// nothing about the reward should move (including missing effective-level
+// stats). Fills `canonical` with the creature's own level after the state check.
 //
 // Deliberately not `ZoneScalingMgr::GetEffectiveLevelFor`, which is otherwise
 // identical: that one feeds the Chrono-suppressed and elite-offset counters,
@@ -702,13 +702,18 @@ public:
     // records whether this build's core had the header at all.
     [[nodiscard]] bool IsCoreViewEnabled() const { return _coreView; }
     [[nodiscard]] bool IsCoreViewInstalled() const { return _coreViewInstalled; }
-    void SetCoreViewInstalled(bool installed) { _coreViewInstalled = installed; }
+    void SetCoreViewInstalled(bool installed)
+    {
+        _coreViewInstalled = installed;
+        _coreViewChecked = true;
+    }
     [[nodiscard]] bool IsPoolDisplayEnabled() const { return _scalePoolDisplay; }
 
     // GetEffectiveLevelFor without the diagnostics. The core asks this from
     // inside getLevelForTarget -- per aggro check, per roll, per XP award --
     // and routing that through the counting form would make "scaled fights"
-    // and "Chrono-suppressed fights" count queries instead of fights.
+    // and "Chrono-suppressed fights" count queries instead of fights. Both
+    // reject effective levels without usable creature stats.
     [[nodiscard]] Optional<uint8> GetViewLevelFor(Creature const* creature,
                                                   Player const* player) const;
 
@@ -857,6 +862,7 @@ private:
     bool _scalePoolDisplay  = true;
     bool _coreView          = true;
     bool _coreViewInstalled = false;
+    bool _coreViewChecked   = false;
 
     // Ratios are clamped into this range before use. Nothing legitimate gets
     // near either end -- the widest band this core can express, level 1 against

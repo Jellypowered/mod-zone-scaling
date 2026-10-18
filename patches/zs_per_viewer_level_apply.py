@@ -19,7 +19,7 @@ from pathlib import Path
 import shutil
 import sys
 
-ROOT = Path.home() / "azerothcore-wotlk"
+ROOT = Path.home() / "/stuff/Source/azerothcore-wotlk"
 HERE = Path(__file__).resolve().parent
 ATTR = "Z-14, from CoA PR #4406 (bozo-1)"
 

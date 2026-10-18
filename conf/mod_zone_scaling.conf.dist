@@ -194,6 +194,10 @@ ZoneScaling.CanonicalLevel = "native"
 #                         a single canonical value rather than a per-player one.
 #                       - Pets, guardians and totems inherit their owner's
 #                         ratio, so they are neither exempt nor double-scaled.
+#                       - Periodic percent-of-max-health damage is not scaled;
+#                         the core has already calculated its percentage before
+#                         the hook. Mixed-effect spells containing such a tick
+#                         leave all their periodic ticks unscaled.
 #
 #                     Use `.zs ratio` to see the exact multipliers for any
 #                     pairing before committing to a band.
@@ -582,6 +586,12 @@ ZoneScaling.Chrono.XpBonus = 10
 #                     to 0 while scaling is enabled logs a warning every
 #                     startup for that reason.
 #
+#                     With the Z-14 core-view patch and CoreView = 1, the core
+#                     already prices kill XP at the effective level. The module
+#                     skips its legacy kill correction regardless of this switch.
+#                     This switch still controls per-recipient group XP
+#                     adjustment and quest XP correction.
+#
 #                     Has no effect when ZoneScaling.Enable = 0.
 #
 #        Default:     1
@@ -611,9 +621,10 @@ ZoneScaling.Xp.Enable = 1
 #                     is a separate switch so it can be turned off on its own
 #                     while ZoneScaling.Xp.Enable stays on.
 #
-#                     Symptoms of it having gone wrong are visible in
-#                     '.zs status', which reports corrected and topped-up kills
-#                     as separate counters.
+#                     With the Z-14 core-view patch and CoreView = 1, the core
+#                     pays these kills directly; this legacy top-up is skipped.
+#                     '.zs status' reports corrected and topped-up kills as
+#                     separate counters only when the legacy paths run.
 #
 #        Default:     1
 #

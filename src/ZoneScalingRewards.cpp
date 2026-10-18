@@ -27,7 +27,13 @@
  * gains a new multiplier, this keeps working. Recomputing the award from
  * scratch would silently drop it.
  *
- * That is the whole of the kill path -- when it can be reached.
+ * That is the kill path WITHOUT the Z-14 core view. With CoreView installed
+ * and enabled, Acore::XP::Gain already prices the victim at its effective
+ * level through getLevelForTarget. Neither the legacy ratio nor gray top-up
+ * may run then: the former would correct an already-correct base award, and
+ * the latter would pay twice for a creature gray only at its canonical level.
+ * Groups still need a recipient-specific ratio against the core's ONE shared
+ * reference base gain, before GiveXP applies each member's rested bonus.
  *
  * ⚠ THE CASE THE HOOK CANNOT REACH, AND WHY IT IS THE IMPORTANT ONE
  *
@@ -72,14 +78,11 @@
  * WHAT THE GROUP CASE COSTS IN ACCURACY
  *
  * In a group the core computes `_xp` once, from the highest member for whom the
- * victim is not gray, and shares it out. The hook hands each member their share,
- * so the ratio's denominator strictly ought to use *that* member's level rather
- * than the receiving player's. This file uses the receiving player's level on
- * purpose: `effective` is itself derived from that player, so the ratio answers
- * "what is this creature worth to me at the level I am fighting it", which is
- * the question a per-player scaling module is built around. In a group of mixed
- * levels the two differ; both are defensible and the difference is small next to
- * the correction itself.
+ * victim is not gray, and shares it out. With Z-14 we snapshot that member's
+ * base gain before anyone levels from this kill, then correct each recipient's
+ * already-shared amount to their own effective-level gain. Without Z-14 the
+ * legacy correction still uses the recipient's level for both terms of its
+ * ratio, which is only approximate in mixed-level groups.
  *
  * QUESTS
  *
@@ -109,6 +112,7 @@
 #include "DBCStructure.h"
 #include "Formulas.h"
 #include "Group.h"
+#include "KillRewarder.h"
 #include "Log.h"
 #include "Pet.h"
 #include "Player.h"
@@ -125,6 +129,24 @@
 
 namespace
 {
+    // The Z-14 core view changes both the gray gate and BaseGain in the core.
+    // Keep the legacy module correction only when that view is unavailable.
+    bool CorePricesEffectiveKillXp()
+    {
+        return sZoneScalingMgr->IsCoreViewInstalled() && sZoneScalingMgr->IsCoreViewEnabled();
+    }
+
+    // The core calculates a group's base XP once, using its highest-level
+    // non-gray member. Remember that base before anyone levels from this kill;
+    // otherwise later recipients could silently get a different denominator.
+    // Attached to the victim, not shared between map threads, and erased on
+    // OnUnitDeath after KillRewarder finishes.
+    struct GroupXpReference : DataMap::Base
+    {
+        static constexpr char const* Key = "ZoneScalingGroupXpReference";
+        uint32 BaseGain = 0;
+    };
+
     // The gray test, spelled out rather than inferred from a zero `BaseGain`,
     // because the two paths in this file are partitioned on it and a reader has
     // to be able to see the partition. Mirrors `Acore::XP::BaseGain`'s own
@@ -257,6 +279,11 @@ Optional<uint8> ZoneScalingRewardLevelFor(Creature* creature, Player const* play
     if (!effective || *effective == state->CanonicalLevel)
         return std::nullopt;
 
+    // Rewards must not move to a level where the damage and pool curves have
+    // no usable creature_classlevelstats row.
+    if (!ZoneScalingMgr::HasBaseStats(creature->GetCreatureTemplate(), *effective))
+        return std::nullopt;
+
     return effective;
 }
 
@@ -361,8 +388,60 @@ public:
     ZoneScalingRewardPlayerScript() : PlayerScript("ZoneScalingRewardPlayerScript",
         {
             PLAYERHOOK_ON_GIVE_EXP,
-            PLAYERHOOK_ON_QUEST_COMPUTE_EXP
+            PLAYERHOOK_ON_QUEST_COMPUTE_EXP,
+            PLAYERHOOK_ON_REWARD_KILL_REWARDER
         }) { }
+
+    // Called before the first member's XP is awarded. The core picks the
+    // highest-level living member within reward distance whose own view of
+    // the victim is not gray; mirror that choice to recover the denominator
+    // of its group-wide _xp without modifying KillRewarder.
+    void OnPlayerRewardKillRewarder(Player* player, KillRewarder* rewarder,
+                                    bool /*isDungeon*/, float& /*rate*/) override
+    {
+        if (!player || !rewarder || !CorePricesEffectiveKillXp()
+            || !sZoneScalingMgr->IsActive() || !sZoneScalingMgr->IsXpScalingEnabled())
+            return;
+
+        Player* killer = rewarder->GetKiller();
+        Group* group = killer ? killer->GetGroup() : nullptr;
+        Creature* creature = ZoneScalingScaledCreature(rewarder->GetVictim());
+        if (!group || !creature || creature->CustomData.Get<GroupXpReference>(GroupXpReference::Key))
+            return;
+
+        Player* reference = nullptr;
+        uint8 highestLevel = 0;
+        bool anyView = false;
+        for (GroupReference* itr = group->GetFirstMember(); itr; itr = itr->next())
+        {
+            Player* member = itr->GetSource();
+            if (!member || (member != killer && !member->IsAtGroupRewardDistance(creature)) || !member->IsAlive())
+                continue;
+
+            uint8 level = member->GetLevel();
+            sScriptMgr->OnPlayerBeforeGetLevelForXPGain(member, level);
+            uint8 const victimLevel = creature->getLevelForTarget(member);
+            anyView |= victimLevel != creature->GetLevel();
+            if (victimLevel > Acore::XP::GetGrayLevel(level) && (!reference || level > highestLevel))
+            {
+                reference = member;
+                highestLevel = level;
+            }
+        }
+
+        if (!reference || !anyView)
+            return;
+
+        ContentLevels const content =
+            GetContentLevelsForMapAndZone(creature->GetMapId(), creature->GetZoneId());
+        uint32 const base = Acore::XP::BaseGain(highestLevel, creature->getLevelForTarget(reference), content);
+        if (base)
+        {
+            auto* snapshot = new GroupXpReference();
+            snapshot->BaseGain = base;
+            creature->CustomData.Set(GroupXpReference::Key, snapshot);
+        }
+    }
 
     // Fired for kills, quests, exploration and battlegrounds. Only the kill
     // source carries a victim whose level this module may have changed; the
@@ -376,7 +455,10 @@ public:
         if (xpSource == PlayerXPSource::XPSOURCE_KILL && victim
             && sZoneScalingMgr->IsXpScalingEnabled() && sZoneScalingMgr->IsActive())
         {
-            AdjustKillXP(player, amount, victim);
+            if (CorePricesEffectiveKillXp())
+                AdjustGroupKillXP(player, amount, victim);
+            else
+                AdjustKillXP(player, amount, victim);
         }
 
         ApplyChronoBonus(player, amount);
@@ -410,6 +492,33 @@ public:
     }
 
 private:
+    static void AdjustGroupKillXP(Player* player, uint32& amount, Unit* victim)
+    {
+        Creature* creature = ZoneScalingScaledCreature(victim);
+        if (!creature)
+            return;
+
+        GroupXpReference const* reference = creature->CustomData.Get<GroupXpReference>(GroupXpReference::Key);
+        if (!reference || !reference->BaseGain)
+            return;
+
+        uint8 level = player->GetLevel();
+        sScriptMgr->OnPlayerBeforeGetLevelForXPGain(player, level);
+        uint32 const base = Acore::XP::BaseGain(level, creature->getLevelForTarget(player),
+            GetContentLevelsForMapAndZone(creature->GetMapId(), creature->GetZoneId()));
+        uint32 const before = amount;
+        amount = uint32(std::min<uint64>(uint64(amount) * base / reference->BaseGain, UINT32_MAX));
+        if (amount == before)
+            return;
+
+        sZoneScalingMgr->CountXpKillAdjusted();
+
+        if (sZoneScalingMgr->IsDebug())
+            LOG_DEBUG("module.zonescaling",
+                      "[zone-scaling] group kill xp for {} (level {}): creature {} xp {} -> {}",
+                      player->GetName(), level, creature->GetEntry(), before, amount);
+    }
+
     static void AdjustKillXP(Player* player, uint32& amount, Unit* victim)
     {
         Creature* creature = ZoneScalingScaledCreature(victim);
@@ -461,7 +570,15 @@ public:
 
     void OnUnitDeath(Unit* unit, Unit* killer) override
     {
-        if (!sZoneScalingMgr->IsGreyKillXpEnabled() || !sZoneScalingMgr->IsActive())
+        // RewardPlayerAndGroupAtKill runs before this hook. Discard the
+        // snapshot even if the module was disabled during the reward.
+        if (unit && unit->IsCreature())
+            unit->ToCreature()->CustomData.Erase(GroupXpReference::Key);
+
+        // Z-14 makes previously gray scaled kills payable by the core itself.
+        // The old top-up would duplicate that award (and its rested bonus).
+        if (!sZoneScalingMgr->IsGreyKillXpEnabled() || !sZoneScalingMgr->IsActive()
+            || CorePricesEffectiveKillXp())
             return;
 
         Creature* creature = ZoneScalingScaledCreature(unit);

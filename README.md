@@ -82,9 +82,9 @@ core that a module cannot make. It is in `patches/`, it is a no-op on a core
 without this module, and the reasoning is under "Glancing and crushing blows:
 the optional core patch" below. Skip it and everything else works.
 
-Then edit `mod_zone_scaling.conf` in your config directory. The module ships
-disabled; nothing changes until you set `ZoneScaling.Enable = 1` **and** add at
-least one row to `mod_zone_scaling_zone`.
+Then edit `mod_zone_scaling.conf` in your config directory. The module ships disabled; nothing changes until you set
+`ZoneScaling.Enable = 1` and either add a row to `mod_zone_scaling_zone` or set
+`ZoneScaling.DefaultBehaviour = "clamp"` to cover unlisted open-world zones.
 
 ## Configuration
 
@@ -134,6 +134,10 @@ that meets it; scaling it is a different feature with different failure modes,
 not the same one applied more widely. If you enable dungeons or raids the
 module logs a warning at startup saying so. Nothing stops you — but the
 warning is there because it is a decision, not a default.
+
+During database loading the startup status says `core view pending startup
+check`; the resolver is installed later in `OnStartup`. The in-game `.zs
+status` reports `ON` or `ABSENT` after that check.
 
 `.zs sweep <mapId> [zoneId]` answers "what would actually scale here" without
 flying anywhere: it walks every spawn on a map, resolves its zone, runs it
@@ -338,6 +342,12 @@ judged by how much of the health bar it removes — the real pool is
 `creature_classlevelstats`, so one ratio used both ways is wrong in one
 direction.
 
+Percentage-of-max-health periodic damage is also left alone: the core computes
+it from the target's maximum health before the damage hook, so multiplying it
+would change the percentage. Because the hook provides a spell but not the
+effect index, every periodic tick of a spell containing such an effect is left
+unscaled, including any flat periodic effect on that same spell.
+
 Heals are deliberately **not** scaled. A creature's self-heal is denominated in
 the same canonical HP as its real pool, so the fraction of the bar it restores is
 already correct for every observer; scaling it would introduce an error rather
@@ -418,12 +428,13 @@ anyone wants: the nameplate then says "Level 8" for something swinging like a
 
 Scaling a creature up without scaling what it pays is worse than not scaling it
 at all: the zone gets harder *and* stays worthless. So the module corrects
-experience to match the level content was actually fought at. Kills, quests and
-the Chrono bonus each have their own switch; all three ride
-`ZoneScaling.Xp.Enable`.
+experience to match the level content was actually fought at. Without Z-14,
+`ZoneScaling.Xp.Enable` controls kill and quest corrections. The Chrono bonus
+is controlled separately by Chrono Mode and `ZoneScaling.Chrono.XpBonus`.
 
-**Kills** are corrected by a ratio. `Acore::XP::Gain` has exactly one term that
-depends on the victim's level, so scaling the award by
+**Without the Z-14 core patch**, kills are corrected by a ratio.
+`Acore::XP::Gain` has exactly one term that depends on the victim's level,
+so scaling the award by
 
 ```
 BaseGain(playerLevel, effectiveLevel) / BaseGain(playerLevel, canonicalLevel)
@@ -434,8 +445,8 @@ lands on the right number while preserving the elite doubling,
 and any XP-percent aura — without the module needing to know that any of them
 exist.
 
-**Grey kills are the case that matters, and the hard one.** Stock AzerothCore
-pays nothing for a creature at or below your grey level. At level 40 that is
+**Without the Z-14 core patch, grey kills are the hard case.** The unpatched
+core pays nothing for a creature at or below your grey level. At level 40 that is
 everything below 31, so a scaled starting zone would be a fight for no reward.
 Worse, the core never even offers the award to a module in that case: it skips
 the hook entirely when the amount is zero. Those kills are therefore paid as a
@@ -443,6 +454,17 @@ top-up after the fact, which means reproducing part of the core's reward
 pipeline. That is why `ZoneScaling.Xp.GreyKills` is a separate switch — it is
 the one piece of this module that can be broken by an unrelated core change,
 and it can be turned off on its own.
+
+**With the Z-14 core patch installed and `CoreView = 1`**, the core prices solo
+kill XP and group eligibility at the effective level itself. The module skips
+its legacy kill ratio and grey-kill top-up to avoid correcting or paying the
+same kill twice. For groups, the core prices a single base award using its
+highest-level non-grey member. With `Xp.Enable = 1`, the module adjusts each
+recipient's already-multiplied share by the ratio of their own effective-level
+base gain to that reference base gain, preserving the group share and aura
+multipliers. `Xp.Enable` also controls quest correction; the Chrono XP bonus
+remains independent. `.zs status` shows `kill XP priced by core (Z-14)` and
+a separate group-correction count instead of the legacy grey-top-up count.
 
 **Quests** are priced at the level their zone presents at. A quest whose level
 is `-1` already tracks the player and is left alone; so is one whose
@@ -645,20 +667,19 @@ module work removes them:
   honor" gate all follow the effective level from that one definition. The
   melee-outcome-gates patch above is then redundant (harmless). Without the
   patch, spell hit and resistance still use canonical levels.
-- **The grey-kill top-up reimplements core logic.** It has to: when the stock
-  award is zero the core never calls the hook a module would use to change it,
+- **Without Z-14, the grey-kill top-up reimplements core logic.** It has to:
+  when the stock award is zero the core never calls the hook a module would use to change it,
   and there is no hook anywhere in `Unit::Kill` before the reward runs, so a
   module cannot even record which victim is about to be priced. The top-up
   reproduces the eligibility rules, the group share and the static multipliers
   from `KillRewarder`. It is correct against the current core and it is the
   first thing to suspect after a core upgrade. `.zs status` counts corrected
   and topped-up kills separately for that reason.
-- **In a mixed-level group the kill ratio uses your level, not the group's
-  reference member.** The core prices a group kill once, from the highest
-  member the victim is not grey to, and shares it out; the ratio here answers
-  "what is this creature worth to *me* at the level I am fighting it". Both are
-  defensible and the difference is small next to the correction itself, but
-  they are not identical.
+- **Group XP is still shared by the core.** With Z-14, this module adjusts
+  each member's share against the core's reference base gain when `Xp.Enable`
+  is on; the core's group rate, level-share weighting and half-XP rules remain
+  in force. Without Z-14, the legacy ratio still uses each recipient's level
+  rather than the core's reference level in mixed-level groups.
 - **Battleground kills are not topped up.** Battlegrounds are off by default
   and run their own rate branch, which this module does not reproduce.
 - **The quest correction is only lightly exercised.** It has fired in the wild

@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace
 {
@@ -62,13 +63,11 @@ uint32 ZoneScalingMgr::ApplyRatio(uint32 amount, float ratio)
     if (!amount || ratio == 1.0f)
         return amount;
 
-    float const scaled = float(amount) * ratio;
+    double const scaled = double(amount) * double(ratio);
 
-    // A hit that was going to land for something must still land for something.
-    // Truncating to 0 reads to a player as immunity, and to the core as a hit
-    // that generates no threat and fires no on-damage proc -- which turns a
-    // slow fight into an unwinnable one.
-    return std::max<uint32>(1, uint32(std::lround(scaled)));
+    // A nonzero hit stays nonzero. Clamp BEFORE converting to uint32: even a
+    // valid input times the configured ratio limit can exceed uint32's range.
+    return uint32(std::clamp(std::round(scaled), 1.0, double(std::numeric_limits<uint32>::max())));
 }
 
 ZoneScalingRatios ZoneScalingMgr::RatiosFrom(ZoneScalingStats const& canonical,
@@ -147,6 +146,11 @@ Optional<uint8> ZoneScalingMgr::GetEffectiveLevelFor(Creature* creature, Player 
     if (!effective || *effective == state->CanonicalLevel)
         return std::nullopt;
 
+    // A level with no usable stat row cannot be normalized. Keep the core,
+    // nameplate, combat and rewards on the same canonical level for this pair.
+    if (!HasBaseStats(creature->GetCreatureTemplate(), *effective))
+        return std::nullopt;
+
     // Chrono Mode (Z-08), and the only place it is tested. This function is the
     // sole gate through which a (creature, player) pair becomes a scaled pair --
     // damage, the melee hit table and the per-observer level display all reach
@@ -194,6 +198,9 @@ Optional<uint8> ZoneScalingMgr::GetViewLevelFor(Creature const* creature, Player
     Optional<uint8> const effective =
         GetEffectiveLevel(state->ZoneId, player->GetLevel(), state->CanonicalLevel, state->Rank);
     if (!effective || *effective == state->CanonicalLevel)
+        return std::nullopt;
+
+    if (!HasBaseStats(creature->GetCreatureTemplate(), *effective))
         return std::nullopt;
 
     if (!IsScalingActiveFor(player, state->ZoneId))
@@ -298,7 +305,10 @@ namespace
             return;
 
         T const before = damage;
-        damage = T(ZoneScalingMgr::ApplyRatio(uint32(damage), ratio));
+        uint32 const scaled = ZoneScalingMgr::ApplyRatio(uint32(damage), ratio);
+        // The direct-spell hook uses int32; casting a larger uint32 would
+        // wrap to a negative damage value before mitigation runs.
+        damage = T(std::min(scaled, uint32(std::numeric_limits<T>::max())));
         sZoneScalingMgr->CountDamageScaled();
 
         if (sZoneScalingMgr->IsDebug())
@@ -354,8 +364,20 @@ public:
         // the same parameter name -- so an unguarded implementation quietly
         // scales heals with the damage ratio. Positivity is the discriminator
         // the aura type would give us if the hook passed it.
-        if (spellInfo && spellInfo->IsPositive())
-            return;
+        if (spellInfo)
+        {
+            if (spellInfo->IsPositive())
+                return;
+
+            // The core computes PERIODIC_DAMAGE_PERCENT from the target's max
+            // health before this hook. Scaling it would turn a fixed percentage
+            // into a level-dependent one. The hook has no effect index, so a
+            // spell with both percent and flat periodic effects must leave all
+            // its ticks alone rather than risk changing its percent tick.
+            for (SpellEffectInfo const& effect : spellInfo->GetEffects())
+                if (effect.IsAura(SPELL_AURA_PERIODIC_DAMAGE_PERCENT))
+                    return;
+        }
 
         ScaleDamage(target, attacker, damage, "periodic");
     }
